@@ -1,0 +1,15 @@
+backend/.env
+backend/.venv/
+frontend/.venv/
+frontend/.streamlit/secrets.toml
+__pycache__/
+*.pyc
+*.db
+*.sqlite
+*.sqlite3
+uploads/*
+reports/*
+data/*
+!uploads/.gitkeep
+!reports/.gitkeep
+!data/.gitkeep

@@ -1,0 +1,18 @@
+{
+  "AABCU1234C": {
+    "bidder_name": "Sample Vendor Pvt Ltd",
+    "udyam_registered": true,
+    "udyam_number": "UDYAM-MH-01-0012345",
+    "gst_registered": true,
+    "gst_status": "Active",
+    "gst_last_return_filed": "2026-08-20",
+    "pan_status": "Valid",
+    "epfo_registered": true,
+    "esic_registered": true,
+    "startup_india_recognized": false,
+    "nsic_registered": true,
+    "blacklisted": false,
+    "make_in_india_local_content_pct": 62,
+    "oem_authorization_on_file": true
+  }
+}
