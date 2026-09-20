@@ -89,7 +89,10 @@ html, body, [class*="css"] {
 }
 
 /* ===== LIGHT MODE BASE (explicit — guarantees readable text on Streamlit Cloud) ===== */
-.stApp { background: #F5F8FB !important; color: #17324D !important; }
+.stApp {
+  background: #F3F6FA !important;
+  color: #17324D !important;
+}
 .block-container { max-width: 1420px; padding-top: 1.8rem; padding-bottom: 3rem; color: #17324D !important; }
 
 /* Headings & body text */
@@ -397,49 +400,966 @@ div[data-testid="stFileUploader"] {
 # DARK THEME OVERRIDE
 # -----------------------------------------------------------------------------
 if st.session_state.get("theme") == "dark":
-    st.markdown("""
-    <style>
-    :root {
-      --navy: #F3F7FB;
-      --bg: #0B1220;
-      --card: #111B2B;
-      --border: #243247;
-      --muted: #9FB0C4;
-      --subtext: #A8B9CC;
-    }
-    .stApp { background: #0B1220 !important; color: #E7EEF7 !important; }
-    [data-testid="stSidebar"] { background: #0F172A !important; border-right: 1px solid #243247 !important; }
-    .block-container { color: #E7EEF7 !important; }
-    .brand-name, .hero h1, .section-title, .workflow h4, .metric-value, h1,h2,h3,h4,h5,h6 { color: #F3F7FB !important; }
-    .subbrand, .hero p, .workflow p, .small-muted, .metric-label, .stCaption, [data-testid="stCaptionContainer"] { color: #9FB0C4 !important; }
-    .hero { background: linear-gradient(135deg, #111E33 0%, #10272F 100%) !important; border-color: #243852 !important; }
-    .metric-card, .workflow, .queue-card, .finding, .login-card, div[data-testid="stMetric"] {
-      background: #111B2B !important;
-      border-color: #243247 !important;
-      color: #E7EEF7 !important;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.2) !important;
-    }
-    .metric-card .metric-help { color: #50C6A9 !important; }
-    .eyebrow { background: #172B4A !important; color: #7FB0FF !important; }
-    .brand-mark { background: linear-gradient(135deg, #0F9D8A 0%, #2563EB 100%) !important; }
-    .status-pass { background: #12382F !important; color: #61D7B4 !important; }
-    .status-fail { background: #3A1E27 !important; color: #FF8E9B !important; }
-    .status-review { background: #3A2D18 !important; color: #F2C76D !important; }
-    .status-neutral { background: #202C3C !important; color: #A9B8C9 !important; }
-    .stTextInput input, .stTextArea textarea, .stSelectbox div[data-baseweb="select"] > div, .stRadio, .stCheckbox, .stToggle {
-      background: #111B2B !important;
-      color: #E7EEF7 !important;
-      border-color: #304258 !important;
-    }
-    .stTextInput input::placeholder, .stTextArea textarea::placeholder { color: #6F8197 !important; }
-    div[data-testid="stFileUploader"] { background: #111B2B !important; border-color: #304258 !important; }
-    .stMarkdown, .stText, label { color: #DCE6F1; }
-    [data-testid="stDataFrame"] { border-color: #26384D !important; }
-    .stAlert { background: #162235 !important; border-color: #2A3C54 !important; }
-    hr { border-color: #243247 !important; }
-    </style>
-    """, unsafe_allow_html=True)
+ st.markdown("""
+<style>
 
+/* =========================================================
+   SendaTender V3 — Theme System
+   Clean Light + Professional Dark
+   ========================================================= */
+
+/* ---------- DESIGN TOKENS ---------- */
+
+:root {
+    --navy: #172B4D;
+    --blue: #2563EB;
+    --blue-hover: #1D4ED8;
+    --teal: #0F8F82;
+
+    --bg: #F7F9FC;
+    --card: #FFFFFF;
+    --card-soft: #F8FAFC;
+
+    --border: #D9E2EC;
+    --border-strong: #C5D2E0;
+
+    --text: #172B4D;
+    --text-secondary: #526581;
+    --muted: #718096;
+
+    --success-bg: #E8F7F1;
+    --success-text: #087A5E;
+
+    --danger-bg: #FDECEC;
+    --danger-text: #B4232F;
+
+    --warning-bg: #FFF4DD;
+    --warning-text: #A76400;
+
+    --neutral-bg: #EEF2F6;
+    --neutral-text: #617183;
+}
+
+
+/* =========================================================
+   GLOBAL APP
+   ========================================================= */
+
+.stApp {
+    background: var(--bg) !important;
+    color: var(--text) !important;
+}
+
+.block-container {
+    max-width: 1420px;
+    padding-top: 1.8rem;
+    padding-bottom: 3rem;
+}
+
+
+/* ---------- GLOBAL TEXT ---------- */
+
+h1, h2, h3, h4, h5, h6 {
+    color: var(--text) !important;
+}
+
+p, li {
+    color: var(--text-secondary);
+}
+
+label {
+    color: var(--text) !important;
+}
+
+[data-testid="stCaptionContainer"] {
+    color: var(--muted) !important;
+}
+
+[data-testid="stMarkdownContainer"] {
+    color: var(--text-secondary);
+}
+
+
+/* =========================================================
+   SIDEBAR
+   ========================================================= */
+
+[data-testid="stSidebar"] {
+    background: #FFFFFF !important;
+    border-right: 1px solid var(--border) !important;
+}
+
+[data-testid="stSidebar"] * {
+    color: var(--text) !important;
+}
+
+[data-testid="stSidebar"] .stCaption,
+[data-testid="stSidebar"] small {
+    color: var(--muted) !important;
+}
+
+
+/* ---------- BRAND ---------- */
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    margin-top: 4px;
+    margin-bottom: 5px;
+}
+
+.brand-mark {
+    width: 38px;
+    height: 38px;
+    border-radius: 11px;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    background: linear-gradient(
+        135deg,
+        #0F8F82 0%,
+        #2563EB 100%
+    );
+
+    color: #FFFFFF !important;
+    font-weight: 850;
+    font-size: 15px;
+
+    box-shadow:
+        0 5px 14px rgba(37, 99, 235, 0.20);
+}
+
+.brand-name {
+    color: var(--text) !important;
+    font-size: 20px;
+    font-weight: 850;
+    letter-spacing: -0.4px;
+}
+
+.brand-name span {
+    color: var(--blue) !important;
+}
+
+.subbrand {
+    color: var(--muted) !important;
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: 0.4px;
+    margin-bottom: 18px;
+}
+
+
+/* =========================================================
+   HERO
+   ========================================================= */
+
+.hero {
+    background: linear-gradient(
+        135deg,
+        #F0F7FF 0%,
+        #EDF9F7 100%
+    );
+
+    border: 1px solid #D9E8F2;
+    border-radius: 24px;
+
+    padding: 36px 42px;
+    margin-bottom: 24px;
+
+    box-shadow:
+        0 5px 20px rgba(31, 55, 82, 0.05);
+}
+
+.eyebrow {
+    color: var(--teal) !important;
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+}
+
+.hero h1 {
+    color: var(--text) !important;
+    font-size: 38px;
+    line-height: 1.12;
+    letter-spacing: -1.2px;
+    margin: 0 0 12px 0;
+}
+
+.hero p {
+    color: var(--text-secondary) !important;
+    font-size: 15px;
+    line-height: 1.65;
+    max-width: 780px;
+    margin: 0;
+}
+
+
+/* =========================================================
+   SECTION TITLES
+   ========================================================= */
+
+.section-title {
+    color: var(--text) !important;
+    font-size: 18px;
+    font-weight: 800;
+    margin: 26px 0 12px 0;
+}
+
+.section-subtitle {
+    color: var(--muted) !important;
+    font-size: 13px;
+}
+
+
+/* =========================================================
+   METRIC CARDS
+   ========================================================= */
+
+.metric-card {
+    background: var(--card);
+
+    border: 1px solid var(--border);
+    border-radius: 18px;
+
+    padding: 22px 24px;
+    min-height: 124px;
+
+    box-shadow:
+        0 4px 18px rgba(31, 55, 82, 0.06);
+
+    transition:
+        transform 0.2s ease,
+        box-shadow 0.2s ease;
+}
+
+.metric-card:hover {
+    transform: translateY(-2px);
+
+    box-shadow:
+        0 8px 22px rgba(31, 55, 82, 0.10);
+}
+
+.metric-label {
+    color: var(--muted) !important;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+}
+
+.metric-value {
+    color: var(--text) !important;
+    font-size: 29px;
+    font-weight: 850;
+    margin-top: 7px;
+}
+
+.metric-help {
+    color: var(--muted) !important;
+    font-size: 12px;
+    margin-top: 4px;
+}
+
+
+/* =========================================================
+   WORKFLOW CARDS
+   ========================================================= */
+
+.workflow {
+    background: var(--card);
+
+    border: 1px solid var(--border);
+    border-radius: 18px;
+
+    padding: 24px;
+    min-height: 165px;
+
+    box-shadow:
+        0 4px 18px rgba(31, 55, 82, 0.06);
+
+    transition:
+        transform 0.2s ease,
+        box-shadow 0.2s ease;
+}
+
+.workflow:hover {
+    transform: translateY(-2px);
+
+    box-shadow:
+        0 8px 22px rgba(31, 55, 82, 0.10);
+}
+
+.workflow-number {
+    color: var(--blue) !important;
+    font-size: 12px;
+    font-weight: 850;
+    letter-spacing: 0.8px;
+}
+
+.workflow h3 {
+    color: var(--text) !important;
+    font-size: 17px;
+    margin: 9px 0 7px 0;
+}
+
+.workflow p {
+    color: var(--text-secondary) !important;
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+
+/* =========================================================
+   QUEUE / RECENT VERIFICATION CARDS
+   ========================================================= */
+
+.queue-card {
+    background: var(--card);
+
+    border: 1px solid var(--border);
+    border-radius: 16px;
+
+    padding: 17px 19px;
+    margin-bottom: 10px;
+
+    box-shadow:
+        0 3px 12px rgba(31, 55, 82, 0.045);
+}
+
+.queue-card strong {
+    color: var(--text) !important;
+}
+
+.small-muted {
+    color: var(--muted) !important;
+    font-size: 12px;
+}
+
+
+/* =========================================================
+   STATUS PILLS
+   ========================================================= */
+
+.status-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    padding: 4px 10px;
+    border-radius: 999px;
+
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.2px;
+}
+
+.status-pass {
+    background: var(--success-bg);
+    color: var(--success-text) !important;
+}
+
+.status-fail {
+    background: var(--danger-bg);
+    color: var(--danger-text) !important;
+}
+
+.status-review {
+    background: var(--warning-bg);
+    color: var(--warning-text) !important;
+}
+
+.status-neutral {
+    background: var(--neutral-bg);
+    color: var(--neutral-text) !important;
+}
+
+
+/* =========================================================
+   FINDINGS
+   ========================================================= */
+
+.finding {
+    background: var(--card);
+
+    border: 1px solid var(--border);
+    border-radius: 14px;
+
+    padding: 16px 18px;
+    margin-bottom: 10px;
+}
+
+.finding-title {
+    color: var(--text) !important;
+    font-weight: 800;
+    margin-bottom: 5px;
+}
+
+.finding-text {
+    color: var(--text-secondary) !important;
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+
+/* =========================================================
+   STREAMLIT INPUTS
+   ========================================================= */
+
+div[data-baseweb="input"],
+div[data-baseweb="textarea"],
+div[data-baseweb="select"] {
+    background: var(--card) !important;
+}
+
+div[data-baseweb="input"] > div,
+div[data-baseweb="textarea"] > div,
+div[data-baseweb="select"] > div {
+    background: var(--card) !important;
+    border-color: var(--border-strong) !important;
+}
+
+input,
+textarea {
+    color: var(--text) !important;
+    background: var(--card) !important;
+}
+
+input::placeholder,
+textarea::placeholder {
+    color: #8A99AA !important;
+}
+
+
+/* ---------- SELECTBOX ---------- */
+
+[data-baseweb="select"] * {
+    color: var(--text) !important;
+}
+
+[data-baseweb="popover"] {
+    background: var(--card) !important;
+}
+
+[data-baseweb="menu"] {
+    background: var(--card) !important;
+}
+
+[data-baseweb="menu"] li {
+    color: var(--text) !important;
+}
+
+
+/* ---------- RADIO ---------- */
+
+[data-testid="stRadio"] label {
+    color: var(--text) !important;
+}
+
+
+/* =========================================================
+   FILE UPLOADER
+   ========================================================= */
+
+div[data-testid="stFileUploader"] {
+    background: var(--card) !important;
+
+    border: 1px dashed var(--border-strong) !important;
+    border-radius: 14px !important;
+
+    padding: 8px !important;
+}
+
+div[data-testid="stFileUploader"] * {
+    color: var(--text-secondary) !important;
+}
+
+div[data-testid="stFileUploader"] small {
+    color: var(--muted) !important;
+}
+
+
+/* =========================================================
+   BUTTONS
+   ========================================================= */
+
+button[kind="primary"] {
+    border-radius: 10px !important;
+
+    font-weight: 750 !important;
+    letter-spacing: 0.2px !important;
+
+    background: linear-gradient(
+        135deg,
+        #2F6FED,
+        #245BC7
+    ) !important;
+
+    color: #FFFFFF !important;
+
+    border: none !important;
+
+    box-shadow:
+        0 6px 16px rgba(47, 111, 237, 0.22),
+        0 0 12px rgba(47, 111, 237, 0.08) !important;
+
+    transition:
+        transform 0.2s ease,
+        box-shadow 0.2s ease !important;
+}
+
+button[kind="primary"]:hover {
+    transform: translateY(-1px);
+
+    box-shadow:
+        0 8px 22px rgba(47, 111, 237, 0.30),
+        0 0 20px rgba(47, 111, 237, 0.13) !important;
+}
+
+button[kind="secondary"] {
+    border-radius: 10px !important;
+
+    font-weight: 700 !important;
+
+    background: var(--card) !important;
+    color: var(--text) !important;
+
+    border: 1px solid var(--border-strong) !important;
+
+    transition:
+        transform 0.2s ease,
+        background 0.2s ease,
+        border-color 0.2s ease !important;
+}
+
+button[kind="secondary"]:hover {
+    background: var(--card-soft) !important;
+    border-color: #9BB6DD !important;
+
+    transform: translateY(-1px);
+}
+
+
+/* =========================================================
+   ALERTS
+   ========================================================= */
+
+div[data-testid="stAlert"] {
+    border-radius: 12px !important;
+}
+
+
+/* =========================================================
+   DATAFRAMES / TABLES
+   ========================================================= */
+
+[data-testid="stDataFrame"] {
+    border: 1px solid var(--border) !important;
+    border-radius: 12px !important;
+    overflow: hidden;
+}
+
+
+/* =========================================================
+   DIVIDERS
+   ========================================================= */
+
+hr {
+    border-color: var(--border) !important;
+}
+
+
+/* =========================================================
+   LOGIN
+   ========================================================= */
+
+.login-wrap {
+    max-width: 480px;
+    margin: 60px auto 0 auto;
+}
+
+.login-card {
+    background: var(--card);
+
+    border: 1px solid var(--border);
+    border-radius: 22px;
+
+    padding: 32px;
+
+    box-shadow:
+        0 10px 30px rgba(31, 55, 82, 0.08);
+}
+
+.login-card h1 {
+    color: var(--text) !important;
+}
+
+.login-card p {
+    color: var(--text-secondary) !important;
+}
+
+
+/* =========================================================
+   DARK MODE
+   ========================================================= */
+
+@media (prefers-color-scheme: dark) {
+
+    :root {
+        --navy: #F8FAFC;
+        --blue: #60A5FA;
+        --blue-hover: #93C5FD;
+        --teal: #2DD4BF;
+
+        --bg: #0F172A;
+        --card: #172033;
+        --card-soft: #1E293B;
+
+        --border: #334155;
+        --border-strong: #475569;
+
+        --text: #F8FAFC;
+        --text-secondary: #CBD5E1;
+        --muted: #94A3B8;
+
+        --success-bg: #12352D;
+        --success-text: #6EE7C5;
+
+        --danger-bg: #3B1D24;
+        --danger-text: #FDA4AF;
+
+        --warning-bg: #3A2D16;
+        --warning-text: #FBBF72;
+
+        --neutral-bg: #263244;
+        --neutral-text: #CBD5E1;
+    }
+
+
+    /* ---------- APP ---------- */
+
+    .stApp {
+        background: #0F172A !important;
+        color: #F8FAFC !important;
+    }
+
+    .block-container {
+        color: #F8FAFC !important;
+    }
+
+
+    /* ---------- TEXT ---------- */
+
+    h1, h2, h3, h4, h5, h6 {
+        color: #F8FAFC !important;
+    }
+
+    p, li {
+        color: #CBD5E1 !important;
+    }
+
+    label {
+        color: #F8FAFC !important;
+    }
+
+    [data-testid="stCaptionContainer"] {
+        color: #94A3B8 !important;
+    }
+
+    [data-testid="stMarkdownContainer"] {
+        color: #CBD5E1 !important;
+    }
+
+
+    /* ---------- SIDEBAR ---------- */
+
+    [data-testid="stSidebar"] {
+        background: #111827 !important;
+        border-right: 1px solid #334155 !important;
+    }
+
+    [data-testid="stSidebar"] * {
+        color: #F8FAFC !important;
+    }
+
+    [data-testid="stSidebar"] .stCaption,
+    [data-testid="stSidebar"] small {
+        color: #94A3B8 !important;
+    }
+
+
+    /* ---------- BRAND ---------- */
+
+    .brand-name {
+        color: #F8FAFC !important;
+    }
+
+    .brand-name span {
+        color: #60A5FA !important;
+    }
+
+    .subbrand {
+        color: #94A3B8 !important;
+    }
+
+
+    /* ---------- HERO ---------- */
+
+    .hero {
+        background: linear-gradient(
+            135deg,
+            #172B46 0%,
+            #123332 100%
+        ) !important;
+
+        border-color: #334155 !important;
+
+        box-shadow:
+            0 8px 26px rgba(0, 0, 0, 0.22);
+    }
+
+    .eyebrow {
+        color: #2DD4BF !important;
+    }
+
+    .hero h1 {
+        color: #F8FAFC !important;
+    }
+
+    .hero p {
+        color: #CBD5E1 !important;
+    }
+
+
+    /* ---------- SECTION TITLES ---------- */
+
+    .section-title {
+        color: #F8FAFC !important;
+    }
+
+    .section-subtitle {
+        color: #94A3B8 !important;
+    }
+
+
+    /* ---------- CARDS ---------- */
+
+    .metric-card,
+    .workflow,
+    .queue-card,
+    .finding,
+    .login-card {
+        background: #172033 !important;
+        border-color: #334155 !important;
+
+        box-shadow:
+            0 5px 18px rgba(0, 0, 0, 0.20);
+    }
+
+    .metric-card:hover,
+    .workflow:hover {
+        box-shadow:
+            0 9px 25px rgba(0, 0, 0, 0.28);
+    }
+
+    .metric-label {
+        color: #94A3B8 !important;
+    }
+
+    .metric-value {
+        color: #F8FAFC !important;
+    }
+
+    .metric-help {
+        color: #94A3B8 !important;
+    }
+
+    .workflow-number {
+        color: #60A5FA !important;
+    }
+
+    .workflow h3 {
+        color: #F8FAFC !important;
+    }
+
+    .workflow p {
+        color: #CBD5E1 !important;
+    }
+
+    .queue-card strong {
+        color: #F8FAFC !important;
+    }
+
+    .small-muted {
+        color: #94A3B8 !important;
+    }
+
+    .finding-title {
+        color: #F8FAFC !important;
+    }
+
+    .finding-text {
+        color: #CBD5E1 !important;
+    }
+
+
+    /* ---------- INPUTS ---------- */
+
+    div[data-baseweb="input"],
+    div[data-baseweb="textarea"],
+    div[data-baseweb="select"] {
+        background: #172033 !important;
+    }
+
+    div[data-baseweb="input"] > div,
+    div[data-baseweb="textarea"] > div,
+    div[data-baseweb="select"] > div {
+        background: #172033 !important;
+        border-color: #475569 !important;
+    }
+
+    input,
+    textarea {
+        color: #F8FAFC !important;
+        background: #172033 !important;
+        caret-color: #F8FAFC !important;
+    }
+
+    input::placeholder,
+    textarea::placeholder {
+        color: #94A3B8 !important;
+    }
+
+
+    /* ---------- SELECT ---------- */
+
+    [data-baseweb="select"] * {
+        color: #F8FAFC !important;
+    }
+
+    [data-baseweb="popover"],
+    [data-baseweb="menu"] {
+        background: #172033 !important;
+    }
+
+    [data-baseweb="menu"] li {
+        color: #F8FAFC !important;
+    }
+
+
+    /* ---------- RADIO ---------- */
+
+    [data-testid="stRadio"] label {
+        color: #F8FAFC !important;
+    }
+
+
+    /* ---------- UPLOADER ---------- */
+
+    div[data-testid="stFileUploader"] {
+        background: #172033 !important;
+        border-color: #475569 !important;
+    }
+
+    div[data-testid="stFileUploader"] * {
+        color: #CBD5E1 !important;
+    }
+
+    div[data-testid="stFileUploader"] small {
+        color: #94A3B8 !important;
+    }
+
+
+    /* ---------- SECONDARY BUTTON ---------- */
+
+    button[kind="secondary"] {
+        background: #172033 !important;
+        color: #F8FAFC !important;
+        border-color: #475569 !important;
+    }
+
+    button[kind="secondary"]:hover {
+        background: #1E293B !important;
+        border-color: #64748B !important;
+    }
+
+
+    /* ---------- TABLE ---------- */
+
+    [data-testid="stDataFrame"] {
+        border-color: #334155 !important;
+    }
+
+
+    /* ---------- DIVIDER ---------- */
+
+    hr {
+        border-color: #334155 !important;
+    }
+
+
+    /* ---------- LOGIN ---------- */
+
+    .login-card h1 {
+        color: #F8FAFC !important;
+    }
+
+    .login-card p {
+        color: #CBD5E1 !important;
+    }
+}
+
+
+/* =========================================================
+   ACCESSIBILITY / FOCUS
+   ========================================================= */
+
+button:focus,
+input:focus,
+textarea:focus {
+    outline: none !important;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+    box-shadow:
+        0 0 0 3px rgba(37, 99, 235, 0.18) !important;
+}
+
+
+/* =========================================================
+   MOBILE
+   ========================================================= */
+
+@media (max-width: 768px) {
+
+    .block-container {
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+
+    .hero {
+        padding: 26px 24px;
+        border-radius: 18px;
+    }
+
+    .hero h1 {
+        font-size: 30px;
+    }
+
+    .metric-card,
+    .workflow {
+        padding: 18px;
+    }
+}
+
+</style>
+""", unsafe_allow_html=True)
 
 def api():
     return SendaAPI(BACKEND_URL, st.session_state.get("token"))
@@ -598,16 +1518,6 @@ if current_officer:
     if st.button("Sign out", use_container_width=True):
         st.session_state.clear()
         st.rerun()
-
-
-# India-inspired accent strip
-st.markdown("""
-<div class="india-accent">
-    <div class="saffron"></div>
-    <div class="white"></div>
-    <div class="green"></div>
-</div>
-""", unsafe_allow_html=True)
 
 
 try:
