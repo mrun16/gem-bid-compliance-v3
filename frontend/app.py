@@ -45,17 +45,43 @@ st.set_page_config(
 st.markdown("""
 <style>
 
+.india-accent {
+    width: 100%;
+    height: 4px;
+    display: flex;
+    overflow: hidden;
+    border-radius: 0 0 3px 3px;
+    margin-bottom: 10px;
+}
+
+.india-accent .saffron {
+    flex: 1;
+    background: #F6D8C2;
+}
+
+.india-accent .white {
+    flex: 1;
+    background: #F7F8F9;
+}
+
+.india-accent .green {
+    flex: 1;
+    background: #D7E9DC;
+}
+
 /* ===== DESIGN TOKENS ===== */
 :root {
   --navy: #17324D;
-  --blue: #2563EB;
-  --blue-hover: #1D4ED8;
-  --teal: #0F9D8A;
-  --bg: #F5F8FB;
+  --blue: #2F6FED;
+  --blue-hover: #245BC7;
+  --teal: #168F83;
+
+  --bg: #F3F6FA;
   --card: #FFFFFF;
-  --border: #DCE5EE;
+
+  --border: #E1E7EF;
   --muted: #6C7C8E;
-  --subtext: #587083;
+  --subtext: #5D6E80;
 }
 
 html, body, [class*="css"] {
@@ -189,12 +215,12 @@ div[data-testid="stFileUploader"] {
   border-radius: 18px;
   padding: 22px 24px;
   min-height: 124px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+  box-shadow: 0 4px 18px rgba(31, 55, 82, 0.06);
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 .metric-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(0,0,0,0.05);
+  box-shadow: 0 8px 22px rgba(31, 55, 82, 0.09);
 }
 .metric-label {
   color: #738294;
@@ -233,7 +259,7 @@ div[data-testid="stFileUploader"] {
   border-radius: 18px;
   padding: 24px;
   min-height: 165px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.02);
+  box-shadow: 0 4px 18px rgba(31, 55, 82, 0.06);
   transition: transform 0.15s ease;
 }
 .workflow:hover { transform: translateY(-2px); }
@@ -317,10 +343,46 @@ button[kind="primary"] {
   border-radius: 10px !important;
   font-weight: 750 !important;
   letter-spacing: 0.2px !important;
+
+  background: linear-gradient(
+    135deg,
+    #2F6FED,
+    #245BC7
+  ) !important;
+
+  color: #FFFFFF !important;
+  border: none !important;
+
+  box-shadow:
+    0 6px 16px rgba(47, 111, 237, 0.22),
+    0 0 12px rgba(47, 111, 237, 0.08) !important;
+
+  transition: all 0.2s ease !important;
 }
+
+button[kind="primary"]:hover {
+  transform: translateY(-1px);
+
+  box-shadow:
+    0 8px 22px rgba(47, 111, 237, 0.28),
+    0 0 20px rgba(47, 111, 237, 0.12) !important;
+}
+
 button[kind="secondary"] {
   border-radius: 10px !important;
   font-weight: 700 !important;
+
+  background: #FFFFFF !important;
+  color: #23405F !important;
+  border: 1px solid #D7E0EA !important;
+
+  transition: all 0.2s ease !important;
+}
+
+button[kind="secondary"]:hover {
+  background: #F7FAFE !important;
+  border-color: #9BB6DD !important;
+  transform: translateY(-1px);
 }
 div[data-testid="stFileUploader"] {
   background: #FFFFFF;
@@ -414,22 +476,33 @@ def render_pdf(pdf_bytes, height=600):
 # -----------------------------------------------------------------------------
 def login_page():
     st.markdown('<div class="login-wrap">', unsafe_allow_html=True)
+
     st.markdown("""
     <div class="login-card">
       <div class="brand">
         <div class="brand-mark">ST</div>
         <div class="brand-name">Senda<span>Tender</span></div>
       </div>
+
       <div class="subbrand">SIH 2026 • PS 26100</div>
-      <h2 style="color:var(--navy);margin-top:20px;font-size:1.45rem;font-weight:800;">Officer Portal</h2>
-      <p style="color:#68798B;font-size:0.92rem;line-height:1.5;">Restricted workspace for authorized procurement officers. AI assists verification; the authorized officer records the final decision.</p>
+
+      <h2 style="color:var(--navy);margin-top:20px;font-size:1.45rem;font-weight:800;">
+        Officer Portal
+      </h2>
     </div>
     """, unsafe_allow_html=True)
 
     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
-    officer_id = st.text_input("Official ID", value="PO-001", placeholder="e.g. PO-001")
-    password = st.text_input("Access Password", type="password", placeholder="Enter your officer password")
 
+    officer_id = st.text_input(
+    "Official ID",
+    placeholder="e.g. PO-001",
+)
+    password = st.text_input(
+        "Access Password",
+        type="password",
+        placeholder="Enter your officer password"
+    )
     submit = st.button("Sign In →", type="primary", use_container_width=True)
 
     if submit:
@@ -518,10 +591,24 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
     st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
-    st.caption(f"Signed in as: **{st.session_state.get('officer_id','PO-001')}**")
+    current_officer = st.session_state.get("officer_id")
+
+if current_officer:
+    st.caption(f"Signed in as: **{current_officer}**")
     if st.button("Sign out", use_container_width=True):
         st.session_state.clear()
         st.rerun()
+
+
+# India-inspired accent strip
+st.markdown("""
+<div class="india-accent">
+    <div class="saffron"></div>
+    <div class="white"></div>
+    <div class="green"></div>
+</div>
+""", unsafe_allow_html=True)
+
 
 try:
     client = api()
@@ -1058,7 +1145,7 @@ def officer_account():
     st.markdown(f"""
     <div class="metric-card">
       <div class="metric-label">AUTHORIZED PROCUREMENT OFFICER</div>
-      <div class="metric-value" style="font-size:1.6rem;margin:6px 0;">{st.session_state.get("officer_id","PO-001")}</div>
+      <div class="metric-value" style="font-size:1.6rem;margin:6px 0;">{st.session_state.get("officer_id","")}</div>
       <div class="metric-help">Role: Evaluation Committee Officer (GeM Decision Support)</div>
     </div>
     """, unsafe_allow_html=True)

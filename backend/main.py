@@ -11,8 +11,14 @@ from fastapi.responses import Response
 import database
 import verification_service as vs
 from config import (
-    CORS_ORIGINS, BOOTSTRAP_OFFICER_ID, BOOTSTRAP_OFFICER_PASSWORD,
-    MAX_FILE_SIZE_BYTES, MAX_FILE_SIZE_MB, UPLOAD_DIR,
+    CORS_ORIGINS,
+    BOOTSTRAP_OFFICER_ID,
+    BOOTSTRAP_OFFICER_PASSWORD,
+    PO_002_PASSWORD,
+    PO_003_PASSWORD,
+    MAX_FILE_SIZE_BYTES,
+    MAX_FILE_SIZE_MB,
+    UPLOAD_DIR,
 )
 from schemas import (
     VerificationResponse, AuditEntryCreate, AuditEntry, ReportRequest,
@@ -42,18 +48,69 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup():
     database.init_db()
-    seeded = database.seed_bootstrap_officer(
-        BOOTSTRAP_OFFICER_ID, BOOTSTRAP_OFFICER_PASSWORD
-    )
-    if seeded:
-        print(f"[SendaTender] Bootstrap officer '{BOOTSTRAP_OFFICER_ID}' seeded into database.")
-    else:
-        print("[SendaTender] Officer database already populated — skipping bootstrap seed.")
-    # Purge any stale sessions from previous runs
-    purged = database.purge_expired_sessions()
-    if purged:
-        print(f"[SendaTender] Purged {purged} expired session(s).")
 
+    # ---------------------------------------------------------
+    # Bootstrap / provision authorized demo officers
+    # ---------------------------------------------------------
+
+    if BOOTSTRAP_OFFICER_PASSWORD:
+        seeded = database.seed_bootstrap_officer(
+            BOOTSTRAP_OFFICER_ID,
+            BOOTSTRAP_OFFICER_PASSWORD,
+        )
+
+        if seeded:
+            print(
+                f"[SendaTender] Bootstrap officer "
+                f"'{BOOTSTRAP_OFFICER_ID}' seeded."
+            )
+        else:
+            print(
+                f"[SendaTender] Bootstrap officer "
+                f"'{BOOTSTRAP_OFFICER_ID}' already exists."
+            )
+    else:
+        print(
+            "[SendaTender] WARNING: "
+            "BOOTSTRAP_OFFICER_PASSWORD is not configured."
+        )
+
+    # PO-002
+    if PO_002_PASSWORD:
+        created = database.ensure_officer(
+            officer_id="PO-002",
+            plain_password=PO_002_PASSWORD,
+            display_name="Procurement Officer 002",
+        )
+
+        if created:
+            print("[SendaTender] Officer 'PO-002' provisioned.")
+        else:
+            print("[SendaTender] Officer 'PO-002' already exists.")
+
+    # PO-003
+    if PO_003_PASSWORD:
+        created = database.ensure_officer(
+            officer_id="PO-003",
+            plain_password=PO_003_PASSWORD,
+            display_name="Procurement Officer 003",
+        )
+
+        if created:
+            print("[SendaTender] Officer 'PO-003' provisioned.")
+        else:
+            print("[SendaTender] Officer 'PO-003' already exists.")
+
+    # ---------------------------------------------------------
+    # Remove expired sessions
+    # ---------------------------------------------------------
+
+    purged = database.purge_expired_sessions()
+
+    if purged:
+        print(
+            f"[SendaTender] Purged {purged} expired session(s)."
+        )
 
 # ---------------------------------------------------------------------------
 # AUTH DEPENDENCY

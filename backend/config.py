@@ -29,3 +29,28 @@ MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
 UPLOAD_DIR = os.environ.get("UPLOAD_DIR", os.path.join(BASE_DIR, "..", "uploads"))
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+BOOTSTRAP_OFFICER_ID = os.getenv(
+    "BOOTSTRAP_OFFICER_ID",
+    "PO-001",
+)
+
+BOOTSTRAP_OFFICER_PASSWORD = os.getenv(
+    "BOOTSTRAP_OFFICER_PASSWORD",
+    "",
+)
+
+PO_002_PASSWORD = os.getenv(
+    "PO_002_PASSWORD",
+    "",
+)
+
+PO_003_PASSWORD = os.getenv(
+    "PO_003_PASSWORD",
+    "",
+)
+
+SESSION_TTL_SECONDS = int(
+    os.getenv("SESSION_TTL_SECONDS", "43200")
+)

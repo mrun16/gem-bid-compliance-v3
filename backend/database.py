@@ -185,6 +185,37 @@ def seed_bootstrap_officer(officer_id: str, plain_password: str) -> bool:
     create_officer(officer_id, plain_password, display_name=officer_id, role="officer")
     return True
 
+def ensure_officer(
+    officer_id: str,
+    plain_password: str,
+    display_name: str = "",
+) -> bool:
+    """
+    Create an officer if that officer_id does not already exist.
+
+    Returns:
+        True  -> officer was created
+        False -> officer already existed
+    """
+    officer_id = officer_id.strip().upper()
+
+    if not officer_id:
+        raise ValueError("Officer ID cannot be empty.")
+
+    if not plain_password:
+        raise ValueError(f"Password for {officer_id} cannot be empty.")
+
+    if officer_exists(officer_id):
+        return False
+
+    create_officer(
+        officer_id=officer_id,
+        plain_password=plain_password,
+        display_name=display_name or officer_id,
+        role="officer",
+    )
+    return True
+
 
 # ---------------------------------------------------------------------------
 # SESSION MANAGEMENT
