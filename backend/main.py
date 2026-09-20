@@ -1,24 +1,35 @@
 import json
 import os
-import sqlite3
 import uuid
-from datetime import datetime, timezone
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 import database
+
 from config import (
     BOOTSTRAP_OFFICER_ID,
     BOOTSTRAP_OFFICER_PASSWORD,
     CORS_ORIGINS,
     MAX_FILE_SIZE_BYTES,
-    MOCK_PORTAL_PATH,
     PO_002_PASSWORD,
     PO_003_PASSWORD,
 )
+
+
+# ---------------------------------------------------------------------------
+# APP
+# ---------------------------------------------------------------------------
 
 app = FastAPI(
     title="SendaTender V3 API",
@@ -27,7 +38,11 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[origin.strip() for origin in CORS_ORIGINS if origin.strip()],
+    allow_origins=[
+        origin.strip()
+        for origin in CORS_ORIGINS
+        if origin.strip()
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -64,7 +79,7 @@ def on_startup():
     database.init_db()
 
     # ---------------------------------------------------------
-    # Bootstrap officer
+    # PO-001 / Bootstrap officer
     # ---------------------------------------------------------
     if BOOTSTRAP_OFFICER_PASSWORD:
         seeded = database.seed_bootstrap_officer(
@@ -119,51 +134,46 @@ def on_startup():
             print("[SendaTender] Officer 'PO-003' already exists.")
 
     # ---------------------------------------------------------
-    # SAFE PASSWORD VERIFICATION DIAGNOSTIC
-    #
-    # This checks the exact environment-variable passwords
-    # against the bcrypt hashes stored in SQLite.
-    #
-    # IMPORTANT:
-    # The actual passwords are NEVER printed.
+    # SAFE PASSWORD DIAGNOSTIC
     # ---------------------------------------------------------
 
     if BOOTSTRAP_OFFICER_PASSWORD:
-        bootstrap_check = database.verify_officer_password(
+        check = database.verify_officer_password(
             BOOTSTRAP_OFFICER_ID,
             BOOTSTRAP_OFFICER_PASSWORD,
         )
 
         print(
             f"[SendaTender] Password verification check for "
-            f"{BOOTSTRAP_OFFICER_ID}: {bootstrap_check}"
+            f"{BOOTSTRAP_OFFICER_ID}: {check}"
         )
 
     if PO_002_PASSWORD:
-        po002_check = database.verify_officer_password(
+        check = database.verify_officer_password(
             "PO-002",
             PO_002_PASSWORD,
         )
 
         print(
             f"[SendaTender] Password verification check for "
-            f"PO-002: {po002_check}"
+            f"PO-002: {check}"
         )
 
     if PO_003_PASSWORD:
-        po003_check = database.verify_officer_password(
+        check = database.verify_officer_password(
             "PO-003",
             PO_003_PASSWORD,
         )
 
         print(
             f"[SendaTender] Password verification check for "
-            f"PO-003: {po003_check}"
+            f"PO-003: {check}"
         )
 
     # ---------------------------------------------------------
     # Clean expired sessions
     # ---------------------------------------------------------
+
     purged = database.purge_expired_sessions()
 
     if purged:
@@ -202,7 +212,7 @@ def health():
     response_model=OfficerLoginResponse,
 )
 def login(req: OfficerLogin):
-    officer_id = req.officer_id.strip()
+    officer_id = req.officer_id.strip().upper()
 
     if not officer_id or not req.password:
         raise HTTPException(
@@ -210,9 +220,8 @@ def login(req: OfficerLogin):
             detail="officer_id and password are required.",
         )
 
-    # Normalize officer IDs but NEVER modify the password.
-    officer_id = officer_id.upper()
-
+    # IMPORTANT:
+    # Password is NOT stripped or modified.
     if not database.verify_officer_password(
         officer_id,
         req.password,
@@ -251,6 +260,7 @@ def logout(
 def require_officer(
     x_officer_token: str | None = Header(default=None),
 ) -> str:
+
     if not x_officer_token:
         raise HTTPException(
             status_code=401,
@@ -269,12 +279,12 @@ def require_officer(
 
 
 # ---------------------------------------------------------------------------
-# OFFICER / ACCOUNT
+# ACCOUNT
 # ---------------------------------------------------------------------------
 
 @app.get("/account")
 def account(
-    officer_id: str = require_officer(),
+    officer_id: str = Depends(require_officer),
 ):
     officer = database.get_officer(officer_id)
 
@@ -293,7 +303,7 @@ def account(
 
 @app.get("/dashboard")
 def dashboard(
-    officer_id: str = require_officer(),
+    officer_id: str = Depends(require_officer),
 ):
     stats = database.dashboard_stats()
 
@@ -309,7 +319,7 @@ def dashboard(
 
 @app.get("/officers")
 def officers(
-    officer_id: str = require_officer(),
+    officer_id: str = Depends(require_officer),
 ):
     return {
         "officers": database.list_officers(),
@@ -317,7 +327,7 @@ def officers(
 
 
 # ---------------------------------------------------------------------------
-# VERIFICATION
+# BATCH VERIFICATION
 # ---------------------------------------------------------------------------
 
 @app.post("/verify/batch")
@@ -326,7 +336,7 @@ async def verify_batch(
     vendor_files: list[UploadFile] = File(...),
     vendor_pans: str = Form("[]"),
     vendor_names: str = Form("[]"),
-    officer_id: str = require_officer(),
+    officer_id: str = Depends(require_officer),
 ):
     if not tender_file.filename:
         raise HTTPException(
@@ -366,7 +376,6 @@ async def verify_batch(
 
     batch_id = str(uuid.uuid4())
 
-    # Import here so startup/auth remains lightweight.
     from verification_service import VerificationService
 
     vs = VerificationService()
@@ -374,6 +383,7 @@ async def verify_batch(
     results = []
 
     for index, vendor_file in enumerate(vendor_files):
+
         vendor_bytes = await vendor_file.read()
 
         if len(vendor_bytes) > MAX_FILE_SIZE_BYTES:
@@ -397,6 +407,10 @@ async def verify_batch(
             else vendor_file.filename
         )
 
+        # -----------------------------------------------------
+        # Portal record
+        # -----------------------------------------------------
+
         portal_record = None
 
         try:
@@ -404,13 +418,22 @@ async def verify_batch(
 
             if isinstance(portal_data, dict):
                 portal_record = portal_data.get(pan)
+
             elif isinstance(portal_data, list):
                 for record in portal_data:
-                    if str(record.get("pan", "")).upper() == pan.upper():
+                    if (
+                        str(record.get("pan", "")).upper()
+                        == pan.upper()
+                    ):
                         portal_record = record
                         break
+
         except Exception:
             portal_record = None
+
+        # -----------------------------------------------------
+        # Verification
+        # -----------------------------------------------------
 
         try:
             result = vs.run_full_pipeline(
@@ -419,8 +442,9 @@ async def verify_batch(
                 pan,
                 portal_record,
             )
+
         except Exception as exc:
-            # Never expose internal stack traces to the officer.
+            # Do not expose traceback to officer.
             result = {
                 "status": "ERROR",
                 "risk_level": "UNKNOWN",
@@ -431,6 +455,10 @@ async def verify_batch(
                 ],
                 "error": str(exc),
             }
+
+        # -----------------------------------------------------
+        # Store verification
+        # -----------------------------------------------------
 
         verification = database.insert_verification_run(
             batch_id=batch_id,
@@ -471,7 +499,7 @@ async def verify_batch(
 @app.get("/verification/{verification_id}")
 def verification(
     verification_id: int,
-    officer_id: str = require_officer(),
+    officer_id: str = Depends(require_officer),
 ):
     result = database.get_verification_run(verification_id)
 
@@ -492,7 +520,7 @@ def verification(
 def verification_document(
     verification_id: int,
     kind: str,
-    officer_id: str = require_officer(),
+    officer_id: str = Depends(require_officer),
 ):
     verification = database.get_verification_run(verification_id)
 
@@ -532,7 +560,7 @@ def verification_document(
 def record_decision(
     verification_id: int,
     req: DecisionRequest,
-    officer_id: str = require_officer(),
+    officer_id: str = Depends(require_officer),
 ):
     verification = database.get_verification_run(verification_id)
 
@@ -566,7 +594,7 @@ def record_decision(
 
 @app.get("/history")
 def history(
-    officer_id: str = require_officer(),
+    officer_id: str = Depends(require_officer),
 ):
     return {
         "officer_id": officer_id,
@@ -580,7 +608,7 @@ def history(
 
 @app.get("/bidder-directory")
 def bidder_directory(
-    officer_id: str = require_officer(),
+    officer_id: str = Depends(require_officer),
 ):
     return {
         "items": database.bidder_directory(),
@@ -590,7 +618,7 @@ def bidder_directory(
 @app.get("/bidder/{pan}")
 def bidder(
     pan: str,
-    officer_id: str = require_officer(),
+    officer_id: str = Depends(require_officer),
 ):
     return {
         "pan": pan,
@@ -604,7 +632,7 @@ def bidder(
 
 @app.get("/audit")
 def audit(
-    officer_id: str = require_officer(),
+    officer_id: str = Depends(require_officer),
 ):
     return {
         "items": database.list_audit_entries(),
@@ -618,7 +646,7 @@ def audit(
 @app.get("/verification/{verification_id}/report")
 def verification_report(
     verification_id: int,
-    officer_id: str = require_officer(),
+    officer_id: str = Depends(require_officer),
 ):
     verification = database.get_verification_run(verification_id)
 
@@ -646,17 +674,31 @@ def verification_report(
 
     result = verification.get("result", {})
 
-    c = canvas.Canvas(report_path, pagesize=A4)
+    c = canvas.Canvas(
+        report_path,
+        pagesize=A4,
+    )
 
     width, height = A4
     y = height - 50
 
-    c.setFont("Helvetica-Bold", 18)
-    c.drawString(40, y, "SendaTender V3 Verification Report")
+    c.setFont(
+        "Helvetica-Bold",
+        18,
+    )
+
+    c.drawString(
+        40,
+        y,
+        "SendaTender V3 Verification Report",
+    )
 
     y -= 35
 
-    c.setFont("Helvetica", 10)
+    c.setFont(
+        "Helvetica",
+        10,
+    )
 
     lines = [
         f"Verification ID: {verification_id}",
@@ -677,9 +719,17 @@ def verification_report(
         if y < 50:
             c.showPage()
             y = height - 50
-            c.setFont("Helvetica", 10)
+            c.setFont(
+                "Helvetica",
+                10,
+            )
 
-        c.drawString(40, y, line[:110])
+        c.drawString(
+            40,
+            y,
+            line[:110],
+        )
+
         y -= 18
 
     c.save()
