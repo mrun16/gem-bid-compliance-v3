@@ -61,11 +61,14 @@ st.markdown("""
 
 .india-accent {
     width: 100%;
-    height: 4px;
+    height: 6px;
     display: flex;
     overflow: hidden;
-    border-radius: 0 0 3px 3px;
-    margin-bottom: 10px;
+    border-radius: 0 0 6px 6px;
+    margin: 0 0 18px 0;
+    box-shadow: 0 2px 8px rgba(31,55,82,0.08);
+    position: relative;
+    z-index: 5;
 }
 
 .india-accent .saffron {
@@ -406,7 +409,6 @@ div[data-testid="stFileUploader"] {
   border: 1px dashed #CBD5E1;
   border-radius: 16px;
   padding: 10px;
-}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1021,9 +1023,7 @@ hr {
    DARK MODE
    ========================================================= */
 
-@media (prefers-color-scheme: dark) {
-
-    /* =========================================================
+/* =========================================================
    IN-APP DARK MODE
    Controlled by st.session_state["theme"]
    ========================================================= */
@@ -1470,7 +1470,7 @@ def login_page():
             st.warning("Please enter your password.")
         else:
             try:
-                result = SendaAPI(BACKEND_URL).login(officer_id.strip(), password.strip())
+                result = SendaAPI(BACKEND_URL).login(officer_id.strip(), password)
                 st.session_state["token"] = result["token"]
                 st.session_state["officer_id"] = result["officer_id"]
                 st.rerun()
@@ -1560,6 +1560,15 @@ if current_officer:
         st.rerun()
 
 
+st.markdown("""
+<div class="india-accent" aria-hidden="true">
+    <div class="saffron"></div>
+    <div class="white"></div>
+    <div class="green"></div>
+</div>
+""", unsafe_allow_html=True)
+
+
 try:
     client = api()
 except Exception:
@@ -1570,6 +1579,45 @@ except Exception:
 # -----------------------------------------------------------------------------
 # OVERVIEW (DASHBOARD) - MATCHES UI_REFERENCE.PNG
 # -----------------------------------------------------------------------------
+def _unwrap_items(payload, *keys):
+    """Normalize backend collection responses without changing the API client contract."""
+    if payload is None:
+        return []
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, list):
+                return value
+        value = payload.get("items")
+        if isinstance(value, list):
+            return value
+    return []
+
+
+def _dashboard_stats(payload):
+    """Accept dashboard stats whether the backend nests them under stats or returns them directly."""
+    if not isinstance(payload, dict):
+        return {}
+    stats = payload.get("stats")
+    if isinstance(stats, dict):
+        return stats
+    return payload
+
+
+def _history_rows(payload):
+    return _unwrap_items(payload, "items", "history", "verifications", "records")
+
+
+def _bidder_rows(payload):
+    return _unwrap_items(payload, "items", "bidders", "records")
+
+
+def _audit_rows(payload):
+    return _unwrap_items(payload, "items", "audit", "records", "entries")
+
+
 def dashboard():
     try:
         data = client.dashboard()
@@ -1577,7 +1625,7 @@ def dashboard():
         st.error(f"Backend unavailable: {e}")
         st.stop()
 
-    stats = data["stats"]
+    stats = _dashboard_stats(data)
 
     # Hero Banner (directly matching UI_REFERENCE.png)
     h_col1, h_col2 = st.columns([1.5, 0.9], gap="large")
@@ -1808,7 +1856,7 @@ def new_verification():
 def verification_history():
     st.markdown('<div class="section-title" style="font-size:1.85rem;margin-top:0;">Verification History</div>', unsafe_allow_html=True)
     try:
-        rows = client.history()
+        rows = _history_rows(client.history())
     except Exception as e:
         st.error(f"Could not load verification records: {e}")
         return
@@ -2004,7 +2052,7 @@ def bidder_directory():
     st.caption("Track historic vendor evaluations, compliance performance, and recurring flags across multiple procurement cycles.")
 
     try:
-        rows = client.bidders()
+        rows = _bidder_rows(client.bidders())
     except Exception as e:
         st.error(f"Failed to load bidder directory: {e}")
         return
@@ -2055,7 +2103,7 @@ def audit_trail():
     st.caption("Immutable record of all officer decisions, timestamps, risk scores, and AI recommendations.")
 
     try:
-        rows = client.audit()
+        rows = _audit_rows(client.audit())
     except Exception as e:
         st.error(f"Could not load audit trail: {e}")
         return
