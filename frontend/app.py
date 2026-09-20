@@ -385,9 +385,17 @@ def api():
 
 def pill(status):
     s = str(status or "UNKNOWN").upper()
-    cls = "status-pass" if s == "PASS" else "status-fail" if s == "FAIL" else "status-review" if s in {"REVIEW", "INCONSISTENT", "BLOCKED", "HIGH"} else "status-neutral"
-    return f'<span class="status-pill {cls}">{s}</span>'
 
+    if s in {"PASS", "LOW"}:
+        cls = "status-pass"
+    elif s in {"FAIL", "HIGH"}:
+        cls = "status-fail"
+    elif s in {"REVIEW", "INCONSISTENT", "BLOCKED", "MEDIUM"}:
+        cls = "status-review"
+    else:
+        cls = "status-neutral"
+
+    return f'<span class="status-pill {cls}">{s}</span>'
 
 def score_text(score):
     return "—" if score is None else f"{score}/100"
