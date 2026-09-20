@@ -24,6 +24,7 @@ from config import (
     MAX_FILE_SIZE_BYTES,
     PO_002_PASSWORD,
     PO_003_PASSWORD,
+    UPLOAD_DIR,
 )
 
 
@@ -221,7 +222,7 @@ def login(req: OfficerLogin):
         )
 
     # IMPORTANT:
-    # Password is NOT stripped or modified.
+    # Password is intentionally NOT stripped or modified.
     if not database.verify_officer_password(
         officer_id,
         req.password,
@@ -350,13 +351,27 @@ async def verify_batch(
             detail="At least one vendor bid is required.",
         )
 
+    # ---------------------------------------------------------
+    # Read and validate tender
+    # ---------------------------------------------------------
+
     tender_bytes = await tender_file.read()
+
+    if not tender_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail="Tender document is empty.",
+        )
 
     if len(tender_bytes) > MAX_FILE_SIZE_BYTES:
         raise HTTPException(
             status_code=413,
             detail="Tender file exceeds the maximum allowed size.",
         )
+
+    # ---------------------------------------------------------
+    # Parse bidder metadata
+    # ---------------------------------------------------------
 
     try:
         pans = json.loads(vendor_pans)
@@ -376,15 +391,64 @@ async def verify_batch(
 
     batch_id = str(uuid.uuid4())
 
-    from verification_service import VerificationService
+    # ---------------------------------------------------------
+    # IMPORTANT:
+    # The verification service exposes run_full_pipeline()
+    # as a function. There is NO VerificationService class.
+    # ---------------------------------------------------------
 
-    vs = VerificationService()
+    from verification_service import run_full_pipeline
 
     results = []
 
+    # ---------------------------------------------------------
+    # Save tender source document once for this batch
+    # ---------------------------------------------------------
+
+    batch_upload_dir = os.path.join(
+        UPLOAD_DIR,
+        batch_id,
+    )
+
+    os.makedirs(
+        batch_upload_dir,
+        exist_ok=True,
+    )
+
+    safe_tender_name = os.path.basename(
+        tender_file.filename
+    )
+
+    tender_path = os.path.join(
+        batch_upload_dir,
+        f"tender_{safe_tender_name}",
+    )
+
+    with open(tender_path, "wb") as tender_out:
+        tender_out.write(tender_bytes)
+
+    # ---------------------------------------------------------
+    # Process every vendor bid
+    # ---------------------------------------------------------
+
     for index, vendor_file in enumerate(vendor_files):
 
+        if not vendor_file.filename:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Vendor file #{index + 1} has no filename.",
+            )
+
         vendor_bytes = await vendor_file.read()
+
+        if not vendor_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Vendor file '{vendor_file.filename}' "
+                    "is empty."
+                ),
+            )
 
         if len(vendor_bytes) > MAX_FILE_SIZE_BYTES:
             raise HTTPException(
@@ -396,7 +460,7 @@ async def verify_batch(
             )
 
         pan = (
-            str(pans[index]).strip()
+            str(pans[index]).strip().upper()
             if index < len(pans)
             else ""
         )
@@ -406,6 +470,25 @@ async def verify_batch(
             if index < len(names)
             else vendor_file.filename
         )
+
+        if not name:
+            name = vendor_file.filename
+
+        # -----------------------------------------------------
+        # Save vendor source document
+        # -----------------------------------------------------
+
+        safe_vendor_name = os.path.basename(
+            vendor_file.filename
+        )
+
+        vendor_path = os.path.join(
+            batch_upload_dir,
+            f"vendor_{index + 1}_{safe_vendor_name}",
+        )
+
+        with open(vendor_path, "wb") as vendor_out:
+            vendor_out.write(vendor_bytes)
 
         # -----------------------------------------------------
         # Portal record
@@ -418,6 +501,13 @@ async def verify_batch(
 
             if isinstance(portal_data, dict):
                 portal_record = portal_data.get(pan)
+
+                # Also support records whose PAN casing differs.
+                if portal_record is None and pan:
+                    for key, record in portal_data.items():
+                        if str(key).upper() == pan.upper():
+                            portal_record = record
+                            break
 
             elif isinstance(portal_data, list):
                 for record in portal_data:
@@ -436,16 +526,18 @@ async def verify_batch(
         # -----------------------------------------------------
 
         try:
-            result = vs.run_full_pipeline(
+            result = run_full_pipeline(
                 tender_bytes,
                 vendor_bytes,
                 pan,
                 portal_record,
             )
 
-        except Exception as exc:
-            # Do not expose traceback to officer.
+        except Exception:
+            # Never expose traceback/internal implementation details
+            # to the procurement officer.
             result = {
+                "blocked": True,
                 "status": "ERROR",
                 "risk_level": "UNKNOWN",
                 "compliance_score": 0,
@@ -453,7 +545,10 @@ async def verify_batch(
                     "Verification service error. "
                     "Please review the documents manually."
                 ],
-                "error": str(exc),
+                "recommendation": (
+                    "Manual review required because automated "
+                    "verification could not be completed."
+                ),
             }
 
         # -----------------------------------------------------
@@ -466,10 +561,14 @@ async def verify_batch(
             bidder_name=name,
             tender_filename=tender_file.filename,
             vendor_filename=vendor_file.filename,
-            tender_path=None,
-            vendor_path=None,
+            tender_path=tender_path,
+            vendor_path=vendor_path,
             result=result,
-            status="READY_FOR_REVIEW",
+            status=(
+                "BLOCKED"
+                if result.get("blocked")
+                else "READY_FOR_REVIEW"
+            ),
         )
 
         results.append(
@@ -501,7 +600,9 @@ def verification(
     verification_id: int,
     officer_id: str = Depends(require_officer),
 ):
-    result = database.get_verification_run(verification_id)
+    result = database.get_verification_run(
+        verification_id
+    )
 
     if not result:
         raise HTTPException(
@@ -522,7 +623,9 @@ def verification_document(
     kind: str,
     officer_id: str = Depends(require_officer),
 ):
-    verification = database.get_verification_run(verification_id)
+    verification = database.get_verification_run(
+        verification_id
+    )
 
     if not verification:
         raise HTTPException(
@@ -562,7 +665,9 @@ def record_decision(
     req: DecisionRequest,
     officer_id: str = Depends(require_officer),
 ):
-    verification = database.get_verification_run(verification_id)
+    verification = database.get_verification_run(
+        verification_id
+    )
 
     if not verification:
         raise HTTPException(
@@ -648,7 +753,9 @@ def verification_report(
     verification_id: int,
     officer_id: str = Depends(require_officer),
 ):
-    verification = database.get_verification_run(verification_id)
+    verification = database.get_verification_run(
+        verification_id
+    )
 
     if not verification:
         raise HTTPException(
@@ -665,7 +772,10 @@ def verification_report(
         "reports",
     )
 
-    os.makedirs(reports_dir, exist_ok=True)
+    os.makedirs(
+        reports_dir,
+        exist_ok=True,
+    )
 
     report_path = os.path.join(
         reports_dir,
@@ -712,7 +822,12 @@ def verification_report(
         f"Compliance Score: {result.get('compliance_score', 'N/A')}",
         "",
         "AI Verification Result:",
-        str(result.get("ai_recommendation", "")),
+        str(
+            result.get(
+                "recommendation",
+                result.get("ai_recommendation", ""),
+            )
+        ),
     ]
 
     for line in lines:
