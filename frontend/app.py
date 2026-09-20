@@ -1,1487 +1,657 @@
 import base64
 import os
 import re
-from datetime import datetime
+from html import escape
 
 import streamlit as st
 
 from api_client import SendaAPI, APIError
 
-# ---------------------------------------------------------------------------
-# BACKEND URL — resolution order:
-#   1. Streamlit Cloud secrets  (st.secrets["BACKEND_URL"])
-#   2. Environment variable     (BACKEND_URL=https://...)
-#   3. Local dev fallback       (http://127.0.0.1:8000)
-# ---------------------------------------------------------------------------
+
+# =============================================================================
+# BACKEND CONFIGURATION
+# =============================================================================
+
 def _resolve_backend_url() -> str:
+    """
+    Backend URL resolution order:
+    1. Streamlit Cloud secrets
+    2. Environment variable
+    3. Local development fallback
+    """
     try:
         url = st.secrets.get("BACKEND_URL", "")
         if url:
             return url.rstrip("/")
     except Exception:
         pass
+
     return os.environ.get("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
 
+
 BACKEND_URL = _resolve_backend_url()
+
 MAX_MB = 50
-MAX_BYTES = MAX_MB * 1024 * 1024
+PAN_RE = re.compile(r"^[A-Z]{5}[0-9]{4}[A-Z]$")
 
-if "theme" not in st.session_state:
-    st.session_state["theme"] = "light"
 
-if "nav_page" not in st.session_state:
-    st.session_state["nav_page"] = "Overview"
+# =============================================================================
+# PAGE CONFIG  (must run before any other st.* call that renders)
+# =============================================================================
 
 st.set_page_config(
-    page_title="SendaTender — Procurement Verification Workspace",
-    page_icon="ST",
+    page_title="SendaTender — Procurement verification workspace",
+    page_icon="🗂️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# -----------------------------------------------------------------------------
-# DESIGN SYSTEM & STYLES (Light & Dark Themes)
-# -----------------------------------------------------------------------------
-st.markdown("""
+
+# =============================================================================
+# SESSION STATE
+# =============================================================================
+
+st.session_state.setdefault("theme", "light")
+st.session_state.setdefault("nav_page", "Overview")
+
+
+# =============================================================================
+# HTML HELPER
+# =============================================================================
+# This is the fix for the raw markup that was showing up on screen.
+#
+# st.markdown() runs the string through a Markdown parser before the HTML is
+# allowed through. Two things inside a triple-quoted block break that:
+#   1. a blank line ENDS the raw-HTML block, so everything after it is parsed
+#      as ordinary Markdown text and printed literally;
+#   2. a line indented by 4+ spaces starts an indented code block.
+# The original login card had both, which is why the markup after the first
+# blank line was rendered as text.
+#
+# ui() strips every line and drops blank lines, so neither can happen again.
+# =============================================================================
+
+def ui(markup: str) -> None:
+    lines = [ln.strip() for ln in markup.strip().splitlines()]
+    st.markdown("".join(ln for ln in lines if ln), unsafe_allow_html=True)
+
+
+def rule() -> None:
+    """Tricolour hairline used at the top of each signed-in view."""
+    ui(
+        """
+        <div class="tricolour" aria-hidden="true">
+        <i class="t-saffron"></i><i class="t-white"></i><i class="t-green"></i>
+        </div>
+        """
+    )
+
+
+# =============================================================================
+# DESIGN SYSTEM
+# =============================================================================
+
+BASE_CSS = """
 <style>
-
-.india-accent {
-    width: 100%;
-    height: 4px;
-    display: flex;
-    overflow: hidden;
-    border-radius: 0 0 3px 3px;
-    margin-bottom: 10px;
-}
-
-.india-accent .saffron {
-    flex: 1;
-    background: #F6D8C2;
-}
-
-.india-accent .white {
-    flex: 1;
-    background: #F7F8F9;
-}
-
-.india-accent .green {
-    flex: 1;
-    background: #D7E9DC;
-}
-
-/* ===== DESIGN TOKENS ===== */
-:root {
-  --navy: #17324D;
-  --blue: #2F6FED;
-  --blue-hover: #245BC7;
-  --teal: #168F83;
-
-  --bg: #F3F6FA;
-  --card: #FFFFFF;
-
-  --border: #E1E7EF;
-  --muted: #6C7C8E;
-  --subtext: #5D6E80;
-}
-
-html, body, [class*="css"] {
-  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-}
-
-/* ===== LIGHT MODE BASE (explicit — guarantees readable text on Streamlit Cloud) ===== */
-.stApp {
-  background: #F3F6FA !important;
-  color: #17324D !important;
-}
-.block-container { max-width: 1420px; padding-top: 1.8rem; padding-bottom: 3rem; color: #17324D !important; }
-
-/* Headings & body text */
-h1, h2, h3, h4, h5, h6 { color: #17324D !important; }
-p, span, div, li { color: inherit; }
-
-/* Streamlit-generated labels, captions, markdown */
-.stMarkdown, .stMarkdown p, .stMarkdown span, .stMarkdown li,
-.stText, label, .stCaption, [data-testid="stCaptionContainer"],
-[data-testid="stMarkdownContainer"] p,
-[data-testid="stMarkdownContainer"] span {
-  color: #17324D !important;
-}
-
-/* Sidebar */
-[data-testid="stSidebar"] {
-  background: #FFFFFF !important;
-  border-right: 1px solid #DCE5EE !important;
-}
-[data-testid="stSidebar"] .block-container { padding: 1.2rem 1rem; }
-[data-testid="stSidebar"] .stMarkdown,
-[data-testid="stSidebar"] label,
-[data-testid="stSidebar"] span,
-[data-testid="stSidebar"] p {
-  color: #17324D !important;
-}
-
-/* Inputs */
-.stTextInput input, .stTextArea textarea {
-  background: #FFFFFF !important;
-  color: #17324D !important;
-  border-color: #DCE5EE !important;
-}
-.stTextInput input::placeholder, .stTextArea textarea::placeholder {
-  color: #9BAFC0 !important;
-}
-
-/* Selectbox / Radio / Toggle */
-.stSelectbox div[data-baseweb="select"] > div {
-  background: #FFFFFF !important;
-  color: #17324D !important;
-  border-color: #DCE5EE !important;
-}
-.stRadio label, .stCheckbox label, .stToggle label {
-  color: #17324D !important;
-}
-
-/* Metrics */
-[data-testid="stMetric"] { color: #17324D !important; }
-[data-testid="stMetricLabel"] { color: #738294 !important; }
-[data-testid="stMetricValue"] { color: #17324D !important; }
-
-/* Alerts / Info boxes */
-.stAlert, .stInfo, .stWarning, .stError, .stSuccess {
-  color: #17324D !important;
-}
-
-/* Tables */
-[data-testid="stDataFrame"] { color: #17324D !important; }
-
-/* File uploader */
-div[data-testid="stFileUploader"] {
-  background: #FFFFFF;
-  border: 1px dashed #CBD5E1;
-  border-radius: 16px;
-  padding: 10px;
-  color: #17324D !important;
-}
-
-/* Brand Logo */
-.brand { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
-.brand-mark {
-  width: 40px; height: 40px; border-radius: 12px;
-  background: linear-gradient(135deg, #0F9D8A 0%, #2563EB 100%);
-  display: flex; align-items: center; justify-content: center;
-  font-weight: 800; color: #FFFFFF; font-size: 1.15rem;
-  box-shadow: 0 4px 12px rgba(37,99,235,0.22);
-}
-.brand-name { font-size: 1.32rem; font-weight: 800; color: var(--navy); letter-spacing: -0.5px; }
-.brand-name span { color: var(--teal); }
-.subbrand { color: #8494A5; font-size: 0.76rem; font-weight: 700; margin: 0 0 20px 52px; letter-spacing: 0.4px; }
-
-/* Hero Section */
-.hero {
-  background: linear-gradient(135deg, #F0F8FC 0%, #EAF5F6 100%);
-  border: 1px solid #DCEBED;
-  border-radius: 24px;
-  padding: 36px 42px;
-  margin-bottom: 24px;
-  position: relative;
-  overflow: hidden;
-}
-.eyebrow {
-  display: inline-block;
-  background: #E5EEFF;
-  color: #1E5AD7;
-  border-radius: 999px;
-  padding: 6px 14px;
-  font-weight: 750;
-  font-size: 0.78rem;
-  letter-spacing: 0.3px;
-}
-.hero h1 {
-  color: var(--navy);
-  font-size: 2.7rem;
-  line-height: 1.12;
-  margin: 18px 0 12px;
-  font-weight: 800;
-  letter-spacing: -1.2px;
-}
-.hero p {
-  color: var(--subtext);
-  font-size: 1.05rem;
-  line-height: 1.6;
-  max-width: 680px;
-  margin-bottom: 22px;
-}
-
-/* Metric Cards */
-.metric-card {
-  background: #FFFFFF;
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  padding: 22px 24px;
-  min-height: 124px;
-  box-shadow: 0 4px 18px rgba(31, 55, 82, 0.06);
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
-}
-.metric-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 22px rgba(31, 55, 82, 0.09);
-}
-.metric-label {
-  color: #738294;
-  font-size: 0.75rem;
-  font-weight: 800;
-  text-transform: uppercase;
-  letter-spacing: 0.7px;
-}
-.metric-value {
-  color: var(--navy);
-  font-size: 2.2rem;
-  font-weight: 800;
-  margin-top: 8px;
-  line-height: 1.1;
-}
-.metric-help {
-  color: #2BA88F;
-  font-size: 0.82rem;
-  font-weight: 600;
-  margin-top: 6px;
-}
-
-/* Section Titles */
-.section-title {
-  color: var(--navy);
-  font-size: 1.38rem;
-  font-weight: 800;
-  margin: 28px 0 14px;
-  letter-spacing: -0.4px;
-}
-
-/* 3-Step Workflow Cards */
-.workflow {
-  background: #FFFFFF;
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  padding: 24px;
-  min-height: 165px;
-  box-shadow: 0 4px 18px rgba(31, 55, 82, 0.06);
-  transition: transform 0.15s ease;
-}
-.workflow:hover { transform: translateY(-2px); }
-.step {
-  display: inline-flex;
-  width: 36px; height: 36px;
-  align-items: center; justify-content: center;
-  border-radius: 10px;
-  font-weight: 800;
-  font-size: 1rem;
-  margin-bottom: 14px;
-}
-.step-1 { background: #E9F0FF; color: #2563EB; }
-.step-2 { background: #E5F7F0; color: #087A5E; }
-.step-3 { background: #FFF4E5; color: #D97706; }
-.workflow h4 {
-  color: var(--navy);
-  margin: 0 0 8px;
-  font-size: 1.08rem;
-  font-weight: 750;
-}
-.workflow p {
-  color: #6A7B8D;
-  font-size: 0.91rem;
-  line-height: 1.55;
-  margin: 0;
-}
-
-/* Status Pills */
-.status-pill {
-  display: inline-block;
-  border-radius: 999px;
-  padding: 4px 11px;
-  font-size: 0.74rem;
-  font-weight: 800;
-  letter-spacing: 0.3px;
-  text-transform: uppercase;
-}
-.status-pass { background: #E5F7F0; color: #087A5E; }
-.status-fail { background: #FDEBEC; color: #B4232F; }
-.status-review { background: #FFF3DB; color: #A76400; }
-.status-neutral { background: #EDF1F5; color: #617183; }
-
-/* Findings Cards */
-.finding {
-  background: #FFFFFF;
-  border: 1px solid var(--border);
-  border-left: 6px solid #C8D4E0;
-  border-radius: 14px;
-  padding: 18px 20px;
-  margin: 12px 0;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.02);
-}
-.finding.pass { border-left-color: #10B981; }
-.finding.fail { border-left-color: #EF4444; }
-.finding.review { border-left-color: #F59E0B; }
-.finding.unverifiable { border-left-color: #94A3B8; }
-
-.queue-card {
-  background: #FFFFFF;
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 16px 20px;
-  margin: 10px 0;
-}
-
-.small-muted { color: #748496; font-size: 0.84rem; }
-
-/* Login Page */
-.login-wrap { max-width: 480px; margin: 6vh auto; }
-.login-card {
-  background: #FFFFFF;
-  border: 1px solid var(--border);
-  border-radius: 24px;
-  padding: 36px 38px;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.04);
-}
-
-/* Buttons and Inputs */
-button[kind="primary"] {
-  border-radius: 10px !important;
-  font-weight: 750 !important;
-  letter-spacing: 0.2px !important;
-
-  background: linear-gradient(
-    135deg,
-    #2F6FED,
-    #245BC7
-  ) !important;
-
-  color: #FFFFFF !important;
-  border: none !important;
-
-  box-shadow:
-    0 6px 16px rgba(47, 111, 237, 0.22),
-    0 0 12px rgba(47, 111, 237, 0.08) !important;
-
-  transition: all 0.2s ease !important;
-}
-
-button[kind="primary"]:hover {
-  transform: translateY(-1px);
-
-  box-shadow:
-    0 8px 22px rgba(47, 111, 237, 0.28),
-    0 0 20px rgba(47, 111, 237, 0.12) !important;
-}
-
-button[kind="secondary"] {
-  border-radius: 10px !important;
-  font-weight: 700 !important;
-
-  background: #FFFFFF !important;
-  color: #23405F !important;
-  border: 1px solid #D7E0EA !important;
-
-  transition: all 0.2s ease !important;
-}
-
-button[kind="secondary"]:hover {
-  background: #F7FAFE !important;
-  border-color: #9BB6DD !important;
-  transform: translateY(-1px);
-}
-div[data-testid="stFileUploader"] {
-  background: #FFFFFF;
-  border: 1px dashed #CBD5E1;
-  border-radius: 16px;
-  padding: 10px;
-}
-</style>
-""", unsafe_allow_html=True)
-
-# -----------------------------------------------------------------------------
-# DARK THEME OVERRIDE
-# -----------------------------------------------------------------------------
-if st.session_state.get("theme") == "dark":
- st.markdown("""
-<style>
-
-/* =========================================================
-   SendaTender V3 — Theme System
-   Clean Light + Professional Dark
-   ========================================================= */
-
-/* ---------- DESIGN TOKENS ---------- */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
 :root {
-    --navy: #172B4D;
-    --blue: #2563EB;
-    --blue-hover: #1D4ED8;
-    --teal: #0F8F82;
+    --paper:        #FFFFFF;
+    --canvas:       #F1F4F7;
+    --panel:        #FFFFFF;
+    --panel-sunk:   #F7F9FB;
 
-    --bg: #F7F9FC;
-    --card: #FFFFFF;
-    --card-soft: #F8FAFC;
+    --ink:          #12202E;
+    --ink-2:        #47596C;
+    --ink-3:        #77899A;
 
-    --border: #D9E2EC;
-    --border-strong: #C5D2E0;
+    --rule:         #DBE2E9;
+    --rule-strong:  #BFCCD8;
 
-    --text: #172B4D;
-    --text-secondary: #526581;
-    --muted: #718096;
+    --seal:         #1C3D5A;
+    --seal-soft:    #E7EEF5;
 
-    --success-bg: #E8F7F1;
-    --success-text: #087A5E;
+    --saffron:      #C9761D;
+    --green:        #1F6F4A;
 
-    --danger-bg: #FDECEC;
-    --danger-text: #B4232F;
+    --cleared-bg:   #E6F1EA;
+    --cleared-ink:  #1B6340;
 
-    --warning-bg: #FFF4DD;
-    --warning-text: #A76400;
+    --failed-bg:    #F8E8E7;
+    --failed-ink:   #98241E;
 
-    --neutral-bg: #EEF2F6;
-    --neutral-text: #617183;
+    --held-bg:      #F7EEDC;
+    --held-ink:     #7E5410;
+
+    --quiet-bg:     #EBEFF3;
+    --quiet-ink:    #5C6E7F;
+
+    --radius:       6px;
+    --radius-lg:    10px;
 }
 
-
-/* =========================================================
-   GLOBAL APP
-   ========================================================= */
-
-.stApp {
-    background: var(--bg) !important;
-    color: var(--text) !important;
+html, body, [class*="css"], .stApp {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-feature-settings: 'tnum' 1, 'cv05' 1;
 }
+
+.stApp { background: var(--canvas) !important; color: var(--ink) !important; }
 
 .block-container {
-    max-width: 1420px;
-    padding-top: 1.8rem;
-    padding-bottom: 3rem;
+    max-width: 1320px;
+    padding-top: 1rem;
+    padding-bottom: 4rem;
 }
 
+h1, h2, h3, h4, h5, h6 { color: var(--ink) !important; letter-spacing: -0.015em; }
+p, li { color: var(--ink-2); }
+.stMarkdown, [data-testid="stMarkdownContainer"] { color: var(--ink); }
+[data-testid="stCaptionContainer"] { color: var(--ink-3) !important; }
 
-/* ---------- GLOBAL TEXT ---------- */
+code, .mono { font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace; }
 
-h1, h2, h3, h4, h5, h6 {
-    color: var(--text) !important;
-}
+/* --- tricolour hairline ------------------------------------------------- */
+.tricolour { display: flex; height: 3px; width: 100%; margin: 0 0 18px; border-radius: 2px; overflow: hidden; }
+.tricolour i { flex: 1; display: block; }
+.t-saffron { background: var(--saffron); }
+.t-white   { background: var(--rule-strong); }
+.t-green   { background: var(--green); }
 
-p, li {
-    color: var(--text-secondary);
-}
-
-label {
-    color: var(--text) !important;
-}
-
-[data-testid="stCaptionContainer"] {
-    color: var(--muted) !important;
-}
-
-[data-testid="stMarkdownContainer"] {
-    color: var(--text-secondary);
-}
-
-
-/* =========================================================
-   SIDEBAR
-   ========================================================= */
-
+/* --- sidebar ------------------------------------------------------------ */
 [data-testid="stSidebar"] {
-    background: #FFFFFF !important;
-    border-right: 1px solid var(--border) !important;
+    background: var(--paper) !important;
+    border-right: 1px solid var(--rule) !important;
+}
+[data-testid="stSidebar"] .block-container { padding: 1.1rem 0.9rem 1.5rem; }
+[data-testid="stSidebar"] .stMarkdown,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] p { color: var(--ink) !important; }
+
+[data-testid="stSidebar"] [data-testid="stRadio"] > div { gap: 2px; }
+[data-testid="stSidebar"] [data-testid="stRadio"] label {
+    border-radius: var(--radius);
+    padding: 7px 9px;
+    border-left: 2px solid transparent;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] label:hover {
+    background: var(--panel-sunk);
+    border-left-color: var(--rule-strong);
 }
 
-[data-testid="stSidebar"] * {
-    color: var(--text) !important;
-}
-
-[data-testid="stSidebar"] .stCaption,
-[data-testid="stSidebar"] small {
-    color: var(--muted) !important;
-}
-
-
-/* ---------- BRAND ---------- */
-
-.brand {
-    display: flex;
-    align-items: center;
-    gap: 11px;
-    margin-top: 4px;
-    margin-bottom: 5px;
-}
-
-.brand-mark {
-    width: 38px;
-    height: 38px;
-    border-radius: 11px;
-
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    background: linear-gradient(
-        135deg,
-        #0F8F82 0%,
-        #2563EB 100%
-    );
-
+/* --- masthead ----------------------------------------------------------- */
+.mast { display: flex; align-items: center; gap: 11px; }
+.seal {
+    width: 40px; height: 40px;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--seal);
     color: #FFFFFF !important;
-    font-weight: 850;
-    font-size: 15px;
-
-    box-shadow:
-        0 5px 14px rgba(37, 99, 235, 0.20);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.86rem; font-weight: 500; letter-spacing: 0.5px;
+    border: 1px solid rgba(255,255,255,0.14);
+}
+.mast-name { font-size: 1.2rem; font-weight: 700; letter-spacing: -0.02em; color: var(--ink) !important; line-height: 1.1; }
+.mast-name em { font-style: normal; color: var(--seal) !important; }
+.mast-ref {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.7rem; color: var(--ink-3) !important;
+    margin-top: 2px;
 }
 
-.brand-name {
-    color: var(--text) !important;
-    font-size: 20px;
-    font-weight: 850;
-    letter-spacing: -0.4px;
+/* --- docket (hero) ------------------------------------------------------ */
+.docket {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-top: 3px solid var(--seal);
+    border-radius: var(--radius-lg);
+    padding: 30px 32px 26px;
 }
-
-.brand-name span {
-    color: var(--blue) !important;
+.docket h1 {
+    font-size: 2.05rem; line-height: 1.16; font-weight: 700;
+    letter-spacing: -0.03em; margin: 0 0 12px; max-width: 18ch;
 }
+.docket p { font-size: 0.95rem; line-height: 1.6; max-width: 62ch; margin: 0; color: var(--ink-2) !important; }
 
-.subbrand {
-    color: var(--muted) !important;
-    font-size: 11px;
-    font-weight: 650;
-    letter-spacing: 0.4px;
-    margin-bottom: 18px;
+/* --- standing panel (right of docket) ----------------------------------- */
+.standing {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    padding: 22px 22px 14px;
+    height: 100%;
 }
-
-
-/* =========================================================
-   HERO
-   ========================================================= */
-
-.hero {
-    background: linear-gradient(
-        135deg,
-        #F0F7FF 0%,
-        #EDF9F7 100%
-    );
-
-    border: 1px solid #D9E8F2;
-    border-radius: 24px;
-
-    padding: 36px 42px;
-    margin-bottom: 24px;
-
-    box-shadow:
-        0 5px 20px rgba(31, 55, 82, 0.05);
+.standing-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding-bottom: 12px; border-bottom: 1px solid var(--rule);
 }
-
-.eyebrow {
-    color: var(--teal) !important;
-    font-size: 12px;
-    font-weight: 800;
-    letter-spacing: 1.2px;
-    text-transform: uppercase;
-    margin-bottom: 8px;
+.standing-title { font-size: 0.95rem; font-weight: 600; color: var(--ink) !important; }
+.standing-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 11px 0; border-bottom: 1px solid var(--rule);
+    font-size: 0.86rem; color: var(--ink-2);
 }
+.standing-row:last-child { border-bottom: 0; }
+.standing-row b { font-family: 'IBM Plex Mono', monospace; font-size: 0.95rem; color: var(--ink) !important; font-weight: 500; }
 
-.hero h1 {
-    color: var(--text) !important;
-    font-size: 38px;
-    line-height: 1.12;
-    letter-spacing: -1.2px;
-    margin: 0 0 12px 0;
+/* --- tiles -------------------------------------------------------------- */
+.tile {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    padding: 18px 20px 16px;
+    min-height: 116px;
 }
-
-.hero p {
-    color: var(--text-secondary) !important;
-    font-size: 15px;
-    line-height: 1.65;
-    max-width: 780px;
-    margin: 0;
+.tile-label { font-size: 0.79rem; font-weight: 500; color: var(--ink-3) !important; }
+.tile-value {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 1.95rem; font-weight: 500; line-height: 1.1;
+    color: var(--ink) !important; margin: 10px 0 6px;
 }
+.tile-note { font-size: 0.78rem; color: var(--ink-2) !important; }
+.tile.attention { border-left: 3px solid var(--saffron); }
 
-
-/* =========================================================
-   SECTION TITLES
-   ========================================================= */
-
-.section-title {
-    color: var(--text) !important;
-    font-size: 18px;
-    font-weight: 800;
-    margin: 26px 0 12px 0;
+/* --- stage cards -------------------------------------------------------- */
+.stage {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+    min-height: 162px;
 }
-
-.section-subtitle {
-    color: var(--muted) !important;
-    font-size: 13px;
+.stage-no {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.74rem; color: var(--ink-3) !important;
+    padding-bottom: 9px; margin-bottom: 11px;
+    border-bottom: 1px solid var(--rule); display: block;
 }
+.stage h4 { margin: 0 0 6px; font-size: 1rem; font-weight: 600; }
+.stage p { margin: 0; font-size: 0.86rem; line-height: 1.55; }
 
-
-/* =========================================================
-   METRIC CARDS
-   ========================================================= */
-
-.metric-card {
-    background: var(--card);
-
-    border: 1px solid var(--border);
-    border-radius: 18px;
-
-    padding: 22px 24px;
-    min-height: 124px;
-
-    box-shadow:
-        0 4px 18px rgba(31, 55, 82, 0.06);
-
-    transition:
-        transform 0.2s ease,
-        box-shadow 0.2s ease;
+/* --- record rows -------------------------------------------------------- */
+.record {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 12px 15px;
+    margin: 7px 0;
 }
+.record b { color: var(--ink) !important; font-weight: 600; }
+.meta { color: var(--ink-3) !important; font-size: 0.79rem; }
+.meta .mono { color: var(--ink-2) !important; }
 
-.metric-card:hover {
-    transform: translateY(-2px);
-
-    box-shadow:
-        0 8px 22px rgba(31, 55, 82, 0.10);
+/* --- verdict pills ------------------------------------------------------ */
+.pill {
+    display: inline-block;
+    border-radius: 3px;
+    padding: 3px 8px;
+    font-size: 0.72rem; font-weight: 600; letter-spacing: 0.01em;
+    border: 1px solid transparent;
 }
+.pill-cleared { background: var(--cleared-bg); color: var(--cleared-ink) !important; border-color: #C8E0D2; }
+.pill-failed  { background: var(--failed-bg);  color: var(--failed-ink)  !important; border-color: #EBC9C6; }
+.pill-held    { background: var(--held-bg);    color: var(--held-ink)    !important; border-color: #E6D2AC; }
+.pill-quiet   { background: var(--quiet-bg);   color: var(--quiet-ink)   !important; border-color: var(--rule); }
 
-.metric-label {
-    color: var(--muted) !important;
-    font-size: 12px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.7px;
-}
-
-.metric-value {
-    color: var(--text) !important;
-    font-size: 29px;
-    font-weight: 850;
-    margin-top: 7px;
-}
-
-.metric-help {
-    color: var(--muted) !important;
-    font-size: 12px;
-    margin-top: 4px;
-}
-
-
-/* =========================================================
-   WORKFLOW CARDS
-   ========================================================= */
-
-.workflow {
-    background: var(--card);
-
-    border: 1px solid var(--border);
-    border-radius: 18px;
-
-    padding: 24px;
-    min-height: 165px;
-
-    box-shadow:
-        0 4px 18px rgba(31, 55, 82, 0.06);
-
-    transition:
-        transform 0.2s ease,
-        box-shadow 0.2s ease;
-}
-
-.workflow:hover {
-    transform: translateY(-2px);
-
-    box-shadow:
-        0 8px 22px rgba(31, 55, 82, 0.10);
-}
-
-.workflow-number {
-    color: var(--blue) !important;
-    font-size: 12px;
-    font-weight: 850;
-    letter-spacing: 0.8px;
-}
-
-.workflow h3 {
-    color: var(--text) !important;
-    font-size: 17px;
-    margin: 9px 0 7px 0;
-}
-
-.workflow p {
-    color: var(--text-secondary) !important;
-    font-size: 13px;
-    line-height: 1.55;
-}
-
-
-/* =========================================================
-   QUEUE / RECENT VERIFICATION CARDS
-   ========================================================= */
-
-.queue-card {
-    background: var(--card);
-
-    border: 1px solid var(--border);
-    border-radius: 16px;
-
-    padding: 17px 19px;
-    margin-bottom: 10px;
-
-    box-shadow:
-        0 3px 12px rgba(31, 55, 82, 0.045);
-}
-
-.queue-card strong {
-    color: var(--text) !important;
-}
-
-.small-muted {
-    color: var(--muted) !important;
-    font-size: 12px;
-}
-
-
-/* =========================================================
-   STATUS PILLS
-   ========================================================= */
-
-.status-pill {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-
-    padding: 4px 10px;
-    border-radius: 999px;
-
-    font-size: 11px;
-    font-weight: 800;
-    letter-spacing: 0.2px;
-}
-
-.status-pass {
-    background: var(--success-bg);
-    color: var(--success-text) !important;
-}
-
-.status-fail {
-    background: var(--danger-bg);
-    color: var(--danger-text) !important;
-}
-
-.status-review {
-    background: var(--warning-bg);
-    color: var(--warning-text) !important;
-}
-
-.status-neutral {
-    background: var(--neutral-bg);
-    color: var(--neutral-text) !important;
-}
-
-
-/* =========================================================
-   FINDINGS
-   ========================================================= */
-
+/* --- findings ----------------------------------------------------------- */
 .finding {
-    background: var(--card);
-
-    border: 1px solid var(--border);
-    border-radius: 14px;
-
-    padding: 16px 18px;
-    margin-bottom: 10px;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--rule-strong);
+    border-radius: var(--radius);
+    padding: 15px 17px;
+    margin: 9px 0;
 }
+.finding.pass { border-left-color: var(--green); }
+.finding.fail { border-left-color: #A32720; }
+.finding.review { border-left-color: var(--saffron); }
+.finding-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.finding-head b { font-size: 0.97rem; font-weight: 600; }
+.finding p { margin: 9px 0 0; font-size: 0.88rem; line-height: 1.55; }
 
-.finding-title {
-    color: var(--text) !important;
-    font-weight: 800;
-    margin-bottom: 5px;
+/* --- notice ------------------------------------------------------------- */
+.notice {
+    background: var(--panel-sunk);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--saffron);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    font-size: 0.8rem; line-height: 1.5; color: var(--ink-2) !important;
 }
+.notice b { color: var(--ink) !important; }
 
-.finding-text {
-    color: var(--text-secondary) !important;
-    font-size: 13px;
-    line-height: 1.55;
+/* --- sign-in ------------------------------------------------------------ */
+.signin {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-top: 3px solid var(--seal);
+    border-radius: var(--radius-lg);
+    padding: 30px 30px 24px;
 }
+.signin h2 { font-size: 1.35rem; font-weight: 700; margin: 22px 0 6px; }
+.signin p { font-size: 0.88rem; line-height: 1.55; margin: 0; color: var(--ink-2) !important; }
 
-
-/* =========================================================
-   STREAMLIT INPUTS
-   ========================================================= */
-
-div[data-baseweb="input"],
-div[data-baseweb="textarea"],
-div[data-baseweb="select"] {
-    background: var(--card) !important;
+/* --- form controls ------------------------------------------------------ */
+.stTextInput input, .stTextArea textarea {
+    background: var(--paper) !important;
+    color: var(--ink) !important;
+    border: 1px solid var(--rule-strong) !important;
+    border-radius: var(--radius) !important;
 }
-
-div[data-baseweb="input"] > div,
-div[data-baseweb="textarea"] > div,
-div[data-baseweb="select"] > div {
-    background: var(--card) !important;
-    border-color: var(--border-strong) !important;
+.stTextInput input:focus, .stTextArea textarea:focus {
+    border-color: var(--seal) !important;
+    box-shadow: 0 0 0 3px rgba(28, 61, 90, 0.10) !important;
 }
+.stTextInput input::placeholder, .stTextArea textarea::placeholder { color: var(--ink-3) !important; }
 
-input,
-textarea {
-    color: var(--text) !important;
-    background: var(--card) !important;
+.stSelectbox div[data-baseweb="select"] > div {
+    background: var(--paper) !important;
+    color: var(--ink) !important;
+    border-color: var(--rule-strong) !important;
+    border-radius: var(--radius) !important;
 }
+[data-baseweb="select"] * { color: var(--ink) !important; }
 
-input::placeholder,
-textarea::placeholder {
-    color: #8A99AA !important;
-}
-
-
-/* ---------- SELECTBOX ---------- */
-
-[data-baseweb="select"] * {
-    color: var(--text) !important;
-}
-
-[data-baseweb="popover"] {
-    background: var(--card) !important;
-}
-
-[data-baseweb="menu"] {
-    background: var(--card) !important;
-}
-
-[data-baseweb="menu"] li {
-    color: var(--text) !important;
-}
-
-
-/* ---------- RADIO ---------- */
-
-[data-testid="stRadio"] label {
-    color: var(--text) !important;
-}
-
-
-/* =========================================================
-   FILE UPLOADER
-   ========================================================= */
+.stRadio label, .stCheckbox label, .stToggle label { color: var(--ink) !important; }
 
 div[data-testid="stFileUploader"] {
-    background: var(--card) !important;
-
-    border: 1px dashed var(--border-strong) !important;
-    border-radius: 14px !important;
-
-    padding: 8px !important;
+    background: var(--panel-sunk) !important;
+    border: 1px dashed var(--rule-strong) !important;
+    border-radius: var(--radius-lg) !important;
+    padding: 10px !important;
 }
-
-div[data-testid="stFileUploader"] * {
-    color: var(--text-secondary) !important;
-}
-
-div[data-testid="stFileUploader"] small {
-    color: var(--muted) !important;
-}
-
-
-/* =========================================================
-   BUTTONS
-   ========================================================= */
+div[data-testid="stFileUploader"]:hover { border-color: var(--seal) !important; }
+div[data-testid="stFileUploader"] * { color: var(--ink-2) !important; }
 
 button[kind="primary"] {
-    border-radius: 10px !important;
-
-    font-weight: 750 !important;
-    letter-spacing: 0.2px !important;
-
-    background: linear-gradient(
-        135deg,
-        #2F6FED,
-        #245BC7
-    ) !important;
-
+    border-radius: var(--radius) !important;
+    font-weight: 600 !important;
+    background: var(--seal) !important;
     color: #FFFFFF !important;
-
-    border: none !important;
-
-    box-shadow:
-        0 6px 16px rgba(47, 111, 237, 0.22),
-        0 0 12px rgba(47, 111, 237, 0.08) !important;
-
-    transition:
-        transform 0.2s ease,
-        box-shadow 0.2s ease !important;
+    border: 1px solid var(--seal) !important;
+    box-shadow: none !important;
 }
-
-button[kind="primary"]:hover {
-    transform: translateY(-1px);
-
-    box-shadow:
-        0 8px 22px rgba(47, 111, 237, 0.30),
-        0 0 20px rgba(47, 111, 237, 0.13) !important;
-}
+button[kind="primary"]:hover { background: #16324A !important; }
 
 button[kind="secondary"] {
-    border-radius: 10px !important;
+    border-radius: var(--radius) !important;
+    font-weight: 500 !important;
+    background: var(--paper) !important;
+    color: var(--ink) !important;
+    border: 1px solid var(--rule-strong) !important;
+}
+button[kind="secondary"]:hover { background: var(--panel-sunk) !important; border-color: var(--seal) !important; }
 
-    font-weight: 700 !important;
+div[data-testid="stAlert"] { border-radius: var(--radius) !important; }
 
-    background: var(--card) !important;
-    color: var(--text) !important;
-
-    border: 1px solid var(--border-strong) !important;
-
-    transition:
-        transform 0.2s ease,
-        background 0.2s ease,
-        border-color 0.2s ease !important;
+[data-testid="stMetric"] { color: var(--ink) !important; }
+[data-testid="stMetricLabel"] { color: var(--ink-3) !important; }
+[data-testid="stMetricValue"] {
+    color: var(--ink) !important;
+    font-family: 'IBM Plex Mono', monospace !important;
 }
 
-button[kind="secondary"]:hover {
-    background: var(--card-soft) !important;
-    border-color: #9BB6DD !important;
+[data-testid="stDataFrame"] { border: 1px solid var(--rule) !important; border-radius: var(--radius) !important; overflow: hidden; }
+hr { border-color: var(--rule) !important; }
 
-    transform: translateY(-1px);
+button:focus-visible, input:focus-visible, textarea:focus-visible {
+    outline: 2px solid var(--seal) !important;
+    outline-offset: 2px;
 }
 
-
-/* =========================================================
-   ALERTS
-   ========================================================= */
-
-div[data-testid="stAlert"] {
-    border-radius: 12px !important;
+@media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
 }
-
-
-/* =========================================================
-   DATAFRAMES / TABLES
-   ========================================================= */
-
-[data-testid="stDataFrame"] {
-    border: 1px solid var(--border) !important;
-    border-radius: 12px !important;
-    overflow: hidden;
-}
-
-
-/* =========================================================
-   DIVIDERS
-   ========================================================= */
-
-hr {
-    border-color: var(--border) !important;
-}
-
-
-/* =========================================================
-   LOGIN
-   ========================================================= */
-
-.login-wrap {
-    max-width: 480px;
-    margin: 60px auto 0 auto;
-}
-
-.login-card {
-    background: var(--card);
-
-    border: 1px solid var(--border);
-    border-radius: 22px;
-
-    padding: 32px;
-
-    box-shadow:
-        0 10px 30px rgba(31, 55, 82, 0.08);
-}
-
-.login-card h1 {
-    color: var(--text) !important;
-}
-
-.login-card p {
-    color: var(--text-secondary) !important;
-}
-
-
-/* =========================================================
-   DARK MODE
-   ========================================================= */
-
-@media (prefers-color-scheme: dark) {
-
-    :root {
-        --navy: #F8FAFC;
-        --blue: #60A5FA;
-        --blue-hover: #93C5FD;
-        --teal: #2DD4BF;
-
-        --bg: #0F172A;
-        --card: #172033;
-        --card-soft: #1E293B;
-
-        --border: #334155;
-        --border-strong: #475569;
-
-        --text: #F8FAFC;
-        --text-secondary: #CBD5E1;
-        --muted: #94A3B8;
-
-        --success-bg: #12352D;
-        --success-text: #6EE7C5;
-
-        --danger-bg: #3B1D24;
-        --danger-text: #FDA4AF;
-
-        --warning-bg: #3A2D16;
-        --warning-text: #FBBF72;
-
-        --neutral-bg: #263244;
-        --neutral-text: #CBD5E1;
-    }
-
-
-    /* ---------- APP ---------- */
-
-    .stApp {
-        background: #0F172A !important;
-        color: #F8FAFC !important;
-    }
-
-    .block-container {
-        color: #F8FAFC !important;
-    }
-
-
-    /* ---------- TEXT ---------- */
-
-    h1, h2, h3, h4, h5, h6 {
-        color: #F8FAFC !important;
-    }
-
-    p, li {
-        color: #CBD5E1 !important;
-    }
-
-    label {
-        color: #F8FAFC !important;
-    }
-
-    [data-testid="stCaptionContainer"] {
-        color: #94A3B8 !important;
-    }
-
-    [data-testid="stMarkdownContainer"] {
-        color: #CBD5E1 !important;
-    }
-
-
-    /* ---------- SIDEBAR ---------- */
-
-    [data-testid="stSidebar"] {
-        background: #111827 !important;
-        border-right: 1px solid #334155 !important;
-    }
-
-    [data-testid="stSidebar"] * {
-        color: #F8FAFC !important;
-    }
-
-    [data-testid="stSidebar"] .stCaption,
-    [data-testid="stSidebar"] small {
-        color: #94A3B8 !important;
-    }
-
-
-    /* ---------- BRAND ---------- */
-
-    .brand-name {
-        color: #F8FAFC !important;
-    }
-
-    .brand-name span {
-        color: #60A5FA !important;
-    }
-
-    .subbrand {
-        color: #94A3B8 !important;
-    }
-
-
-    /* ---------- HERO ---------- */
-
-    .hero {
-        background: linear-gradient(
-            135deg,
-            #172B46 0%,
-            #123332 100%
-        ) !important;
-
-        border-color: #334155 !important;
-
-        box-shadow:
-            0 8px 26px rgba(0, 0, 0, 0.22);
-    }
-
-    .eyebrow {
-        color: #2DD4BF !important;
-    }
-
-    .hero h1 {
-        color: #F8FAFC !important;
-    }
-
-    .hero p {
-        color: #CBD5E1 !important;
-    }
-
-
-    /* ---------- SECTION TITLES ---------- */
-
-    .section-title {
-        color: #F8FAFC !important;
-    }
-
-    .section-subtitle {
-        color: #94A3B8 !important;
-    }
-
-
-    /* ---------- CARDS ---------- */
-
-    .metric-card,
-    .workflow,
-    .queue-card,
-    .finding,
-    .login-card {
-        background: #172033 !important;
-        border-color: #334155 !important;
-
-        box-shadow:
-            0 5px 18px rgba(0, 0, 0, 0.20);
-    }
-
-    .metric-card:hover,
-    .workflow:hover {
-        box-shadow:
-            0 9px 25px rgba(0, 0, 0, 0.28);
-    }
-
-    .metric-label {
-        color: #94A3B8 !important;
-    }
-
-    .metric-value {
-        color: #F8FAFC !important;
-    }
-
-    .metric-help {
-        color: #94A3B8 !important;
-    }
-
-    .workflow-number {
-        color: #60A5FA !important;
-    }
-
-    .workflow h3 {
-        color: #F8FAFC !important;
-    }
-
-    .workflow p {
-        color: #CBD5E1 !important;
-    }
-
-    .queue-card strong {
-        color: #F8FAFC !important;
-    }
-
-    .small-muted {
-        color: #94A3B8 !important;
-    }
-
-    .finding-title {
-        color: #F8FAFC !important;
-    }
-
-    .finding-text {
-        color: #CBD5E1 !important;
-    }
-
-
-    /* ---------- INPUTS ---------- */
-
-    div[data-baseweb="input"],
-    div[data-baseweb="textarea"],
-    div[data-baseweb="select"] {
-        background: #172033 !important;
-    }
-
-    div[data-baseweb="input"] > div,
-    div[data-baseweb="textarea"] > div,
-    div[data-baseweb="select"] > div {
-        background: #172033 !important;
-        border-color: #475569 !important;
-    }
-
-    input,
-    textarea {
-        color: #F8FAFC !important;
-        background: #172033 !important;
-        caret-color: #F8FAFC !important;
-    }
-
-    input::placeholder,
-    textarea::placeholder {
-        color: #94A3B8 !important;
-    }
-
-
-    /* ---------- SELECT ---------- */
-
-    [data-baseweb="select"] * {
-        color: #F8FAFC !important;
-    }
-
-    [data-baseweb="popover"],
-    [data-baseweb="menu"] {
-        background: #172033 !important;
-    }
-
-    [data-baseweb="menu"] li {
-        color: #F8FAFC !important;
-    }
-
-
-    /* ---------- RADIO ---------- */
-
-    [data-testid="stRadio"] label {
-        color: #F8FAFC !important;
-    }
-
-
-    /* ---------- UPLOADER ---------- */
-
-    div[data-testid="stFileUploader"] {
-        background: #172033 !important;
-        border-color: #475569 !important;
-    }
-
-    div[data-testid="stFileUploader"] * {
-        color: #CBD5E1 !important;
-    }
-
-    div[data-testid="stFileUploader"] small {
-        color: #94A3B8 !important;
-    }
-
-
-    /* ---------- SECONDARY BUTTON ---------- */
-
-    button[kind="secondary"] {
-        background: #172033 !important;
-        color: #F8FAFC !important;
-        border-color: #475569 !important;
-    }
-
-    button[kind="secondary"]:hover {
-        background: #1E293B !important;
-        border-color: #64748B !important;
-    }
-
-
-    /* ---------- TABLE ---------- */
-
-    [data-testid="stDataFrame"] {
-        border-color: #334155 !important;
-    }
-
-
-    /* ---------- DIVIDER ---------- */
-
-    hr {
-        border-color: #334155 !important;
-    }
-
-
-    /* ---------- LOGIN ---------- */
-
-    .login-card h1 {
-        color: #F8FAFC !important;
-    }
-
-    .login-card p {
-        color: #CBD5E1 !important;
-    }
-}
-
-
-/* =========================================================
-   ACCESSIBILITY / FOCUS
-   ========================================================= */
-
-button:focus,
-input:focus,
-textarea:focus {
-    outline: none !important;
-}
-
-button:focus-visible,
-input:focus-visible,
-textarea:focus-visible {
-    box-shadow:
-        0 0 0 3px rgba(37, 99, 235, 0.18) !important;
-}
-
-
-/* =========================================================
-   MOBILE
-   ========================================================= */
 
 @media (max-width: 768px) {
+    .block-container { padding-left: 0.85rem; padding-right: 0.85rem; }
+    .docket { padding: 22px 20px; }
+    .docket h1 { font-size: 1.55rem; max-width: none; }
+    .tile, .stage, .standing, .signin { padding: 16px; }
+}
+</style>
+"""
 
-    .block-container {
-        padding-left: 1rem;
-        padding-right: 1rem;
-    }
+DARK_CSS = """
+<style>
+:root {
+    --paper:        #101822;
+    --canvas:       #0B1119;
+    --panel:        #131C27;
+    --panel-sunk:   #172231;
 
-    .hero {
-        padding: 26px 24px;
-        border-radius: 18px;
-    }
+    --ink:          #EEF3F8;
+    --ink-2:        #B3C2D0;
+    --ink-3:        #8395A6;
 
-    .hero h1 {
-        font-size: 30px;
-    }
+    --rule:         #253344;
+    --rule-strong:  #36485C;
 
-    .metric-card,
-    .workflow {
-        padding: 18px;
-    }
+    --seal:         #6FA8DC;
+    --seal-soft:    #1A2C3E;
+
+    --saffron:      #D9903F;
+    --green:        #4FAE7E;
+
+    --cleared-bg:   #16302A;
+    --cleared-ink:  #6FD3A5;
+
+    --failed-bg:    #34201F;
+    --failed-ink:   #EC8E88;
+
+    --held-bg:      #33281440;
+    --held-ink:     #E0B36A;
+
+    --quiet-bg:     #1C2735;
+    --quiet-ink:    #9AAABA;
 }
 
+.stApp { background: var(--canvas) !important; color: var(--ink) !important; }
+
+[data-testid="stSidebar"] { background: var(--paper) !important; border-right-color: var(--rule) !important; }
+[data-testid="stSidebar"] * { color: var(--ink) !important; }
+
+.seal { background: var(--seal-soft); color: var(--seal) !important; border-color: var(--rule-strong); }
+.mast-name em { color: var(--seal) !important; }
+
+.docket, .signin { border-top-color: var(--seal); }
+
+.stTextInput input, .stTextArea textarea,
+div[data-baseweb="input"] > div, div[data-baseweb="textarea"] > div,
+div[data-baseweb="select"] > div {
+    background: var(--panel) !important;
+    color: var(--ink) !important;
+    border-color: var(--rule-strong) !important;
+}
+input, textarea { color: var(--ink) !important; caret-color: var(--ink) !important; }
+[data-baseweb="popover"], [data-baseweb="menu"] { background: var(--panel) !important; }
+[data-baseweb="menu"] li { color: var(--ink) !important; }
+
+div[data-testid="stFileUploader"] { background: var(--panel-sunk) !important; border-color: var(--rule-strong) !important; }
+
+button[kind="primary"] { background: var(--seal) !important; border-color: var(--seal) !important; color: #0B1119 !important; }
+button[kind="primary"]:hover { background: #8CBCE8 !important; }
+button[kind="secondary"] { background: var(--panel) !important; color: var(--ink) !important; border-color: var(--rule-strong) !important; }
+button[kind="secondary"]:hover { background: var(--panel-sunk) !important; }
+
+.t-white { background: var(--rule-strong); }
 </style>
-""", unsafe_allow_html=True)
+"""
+
+st.markdown(BASE_CSS, unsafe_allow_html=True)
+
+# Dark rules are only injected when dark mode is on, so no `:has()` marker
+# trick is needed — the variables above are simply redefined.
+if st.session_state.get("theme") == "dark":
+    st.markdown(DARK_CSS, unsafe_allow_html=True)
+
+
+# =============================================================================
+# HELPERS
+# =============================================================================
 
 def api():
     return SendaAPI(BACKEND_URL, st.session_state.get("token"))
 
 
-def pill(status):
-    s = str(status or "UNKNOWN").upper()
+def pill(status) -> str:
+    s = str(status or "Unknown").strip()
+    key = s.upper()
 
-    if s in {"PASS", "LOW"}:
-        cls = "status-pass"
-    elif s in {"FAIL", "HIGH"}:
-        cls = "status-fail"
-    elif s in {"REVIEW", "INCONSISTENT", "BLOCKED", "MEDIUM"}:
-        cls = "status-review"
+    if key in {"PASS", "LOW"}:
+        cls, text = "pill-cleared", s.title()
+    elif key in {"FAIL", "HIGH"}:
+        cls, text = "pill-failed", s.title()
+    elif key in {"REVIEW", "INCONSISTENT", "BLOCKED", "MEDIUM"}:
+        cls, text = "pill-held", s.title()
     else:
-        cls = "status-neutral"
+        cls, text = "pill-quiet", s.title()
 
-    return f'<span class="status-pill {cls}">{s}</span>'
+    return f'<span class="pill {cls}">{escape(text)}</span>'
 
-def score_text(score):
+
+def score_text(score) -> str:
     return "—" if score is None else f"{score}/100"
 
 
-def render_pdf(pdf_bytes, height=600):
+def stamp(ts: str) -> str:
+    return (ts or "")[:16].replace("T", " ")
+
+
+def render_pdf(pdf_bytes, height=620):
+    """
+    Chrome blocks PDFs served from a data: URI inside an iframe, so the
+    download button above this is the reliable path. <object> keeps a text
+    fallback for browsers that refuse to render inline.
+    """
     b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+
     st.components.v1.html(
-        f'<iframe src="data:application/pdf;base64,{b64}" width="100%" height="{height}" type="application/pdf" style="border:1px solid #DCE5EE;border-radius:12px;"></iframe>',
-        height=height + 10,
+        f"""
+        <object data="data:application/pdf;base64,{b64}"
+                type="application/pdf"
+                width="100%" height="{height}"
+                style="border:1px solid #DBE2E9;border-radius:6px;background:#FFFFFF;">
+          <p style="font-family:Inter,sans-serif;font-size:14px;color:#47596C;padding:12px;">
+            Your browser blocked the inline preview. Use the download button above
+            to open this document.
+          </p>
+        </object>
+        """,
+        height=height + 12,
     )
 
 
-# -----------------------------------------------------------------------------
-# LOGIN VIEW
-# -----------------------------------------------------------------------------
+# =============================================================================
+# SIGN IN
+# =============================================================================
+
 def login_page():
-    st.markdown('<div class="login-wrap">', unsafe_allow_html=True)
+    rule()
 
-    st.markdown("""
-    <div class="login-card">
-      <div class="brand">
-        <div class="brand-mark">ST</div>
-        <div class="brand-name">Senda<span>Tender</span></div>
-      </div>
+    left, mid, right = st.columns([1, 1.6, 1])
 
-      <div class="subbrand">SIH 2026 • PS 26100</div>
+    with mid:
+        ui(
+            """
+            <div class="signin">
+            <div class="mast">
+            <div class="seal">ST</div>
+            <div>
+            <div class="mast-name">Senda<em>Tender</em></div>
+            <div class="mast-ref">SIH 2026 / PS 26100</div>
+            </div>
+            </div>
+            <h2>Officer portal</h2>
+            <p>Sign in to review submitted procurement packages, inspect the
+            supporting evidence, and record a qualification decision.</p>
+            </div>
+            """
+        )
 
-      <h2 style="color:var(--navy);margin-top:20px;font-size:1.45rem;font-weight:800;">
-        Officer Portal
-      </h2>
-    </div>
-    """, unsafe_allow_html=True)
+        st.write("")
 
-    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+        officer_id = st.text_input("Officer ID", placeholder="PO-001")
+        password = st.text_input(
+            "Password", type="password", placeholder="Your officer password"
+        )
 
-    officer_id = st.text_input(
-    "Official ID",
-    placeholder="e.g. PO-001",
-)
-    password = st.text_input(
-        "Access Password",
-        type="password",
-        placeholder="Enter your officer password"
-    )
-    submit = st.button("Sign In →", type="primary", use_container_width=True)
+        if st.button("Sign in", type="primary", use_container_width=True):
+            if not officer_id.strip():
+                st.warning("Enter your officer ID to continue.")
+            elif not password:
+                st.warning("Enter your password to continue.")
+            else:
+                try:
+                    result = SendaAPI(BACKEND_URL).login(
+                        officer_id.strip(), password.strip()
+                    )
+                    st.session_state["token"] = result["token"]
+                    st.session_state["officer_id"] = result["officer_id"]
+                    st.rerun()
+                except Exception:
+                    st.error(
+                        "Those credentials were not accepted. Check the officer "
+                        "ID and password, then try again."
+                    )
 
-    if submit:
-        if not password:
-            st.warning("Please enter your password.")
-        else:
-            try:
-                result = SendaAPI(BACKEND_URL).login(officer_id.strip(), password.strip())
-                st.session_state["token"] = result["token"]
-                st.session_state["officer_id"] = result["officer_id"]
-                st.rerun()
-            except Exception as e:
-                st.error(f"Authentication failed. Please check your credentials and try again.")
+        st.write("")
 
-    st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
-    theme_choice = st.radio(
-        "Appearance",
-        ["Light", "Dark"],
-        horizontal=True,
-        index=1 if st.session_state.get("theme") == "dark" else 0
-    )
-    if (theme_choice == "Dark") != (st.session_state.get("theme") == "dark"):
-        st.session_state["theme"] = "dark" if theme_choice == "Dark" else "light"
-        st.rerun()
+        theme_choice = st.radio(
+            "Appearance",
+            ["Light", "Dark"],
+            horizontal=True,
+            index=1 if st.session_state.get("theme") == "dark" else 0,
+        )
 
-    st.caption("Restricted access. Authorized procurement officers only.")
-    st.markdown("</div>", unsafe_allow_html=True)
+        wants_dark = theme_choice == "Dark"
+        if wants_dark != (st.session_state.get("theme") == "dark"):
+            st.session_state["theme"] = "dark" if wants_dark else "light"
+            st.rerun()
+
+        st.caption("Restricted access. Authorised procurement officers only.")
 
 
 if "token" not in st.session_state:
     login_page()
     st.stop()
 
-# -----------------------------------------------------------------------------
-# SIDEBAR NAVIGATION & CONTROLS
-# -----------------------------------------------------------------------------
+
+# =============================================================================
+# NAVIGATION
+# =============================================================================
+
 NAV_OPTIONS = [
     "Overview",
-    "New Verification",
-    "Verification History",
-    "Bidder Directory",
-    "Audit Trail",
-    "Officer Account",
+    "New verification",
+    "Verification history",
+    "Bidder directory",
+    "Audit trail",
+    "Officer account",
 ]
 
-# Synchronize navigation override if requested by in-page action
 if "pending_nav" in st.session_state:
     target = st.session_state.pop("pending_nav")
     if target in NAV_OPTIONS:
         st.session_state["workspace_nav"] = target
     st.session_state["nav_page"] = target
 
-with st.sidebar:
-    st.markdown('<div class="brand"><div class="brand-mark">ST</div><div class="brand-name">Senda<span>Tender</span></div></div>', unsafe_allow_html=True)
-    st.markdown('<div class="subbrand">SIH 2026 • PS 26100</div>', unsafe_allow_html=True)
+st.session_state.setdefault("workspace_nav", "Overview")
 
-    # Initialize radio state cleanly
-    if "workspace_nav" not in st.session_state:
-        st.session_state["workspace_nav"] = "Overview"
+
+with st.sidebar:
+    ui(
+        """
+        <div class="mast">
+        <div class="seal">ST</div>
+        <div>
+        <div class="mast-name">Senda<em>Tender</em></div>
+        <div class="mast-ref">SIH 2026 / PS 26100</div>
+        </div>
+        </div>
+        """
+    )
+
+    st.write("")
 
     selected_page = st.radio(
         "Workspace",
@@ -1489,510 +659,721 @@ with st.sidebar:
         key="workspace_nav",
         label_visibility="collapsed",
     )
-    # If user selected a sidebar item, clear any deep review state
-    if st.session_state.get("nav_page") == "Verification Review" and selected_page != "Verification History":
+
+    if (
+        st.session_state.get("nav_page") == "Verification review"
+        and selected_page != "Verification history"
+    ):
         st.session_state.pop("selected_verification", None)
         st.session_state["nav_page"] = selected_page
-    elif st.session_state.get("nav_page") != "Verification Review":
+    elif st.session_state.get("nav_page") != "Verification review":
         st.session_state["nav_page"] = selected_page
 
     st.divider()
-    st.markdown("<div class='small-muted' style='margin-bottom:6px;font-weight:700;'>APPEARANCE</div>", unsafe_allow_html=True)
-    dark_mode = st.toggle("Dark mode", value=st.session_state.get("theme") == "dark", key="dark_mode_toggle")
+
+    dark_mode = st.toggle(
+        "Dark mode",
+        value=(st.session_state.get("theme") == "dark"),
+        key="dark_mode_toggle",
+    )
+
     desired_theme = "dark" if dark_mode else "light"
     if desired_theme != st.session_state.get("theme"):
         st.session_state["theme"] = desired_theme
         st.rerun()
 
     st.divider()
-    st.markdown(
-        '<div style="background:#FFF6E6;border:1px solid #F4E1B9;border-radius:14px;padding:12px 14px;font-size:0.79rem;color:#7A5B1A;line-height:1.45;">'
-        '<b>PROTOTYPE MODE</b><br>Government portal checks and AI outputs are simulated for demonstration.</div>',
-        unsafe_allow_html=True,
+
+    ui(
+        """
+        <div class="notice">
+        <b>Prototype</b><br>
+        Government portal lookups and AI findings on this build are simulated
+        for demonstration.
+        </div>
+        """
     )
-    st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+
     current_officer = st.session_state.get("officer_id")
 
+
+# =============================================================================
+# OFFICER BAR
+# =============================================================================
+
 if current_officer:
-    st.caption(f"Signed in as: **{current_officer}**")
-    if st.button("Sign out", use_container_width=True):
-        st.session_state.clear()
-        st.rerun()
+    rule()
+
+    bar_left, bar_right = st.columns([8, 1.3])
+    with bar_left:
+        st.caption(f"Signed in as {current_officer}")
+    with bar_right:
+        if st.button("Sign out", use_container_width=True):
+            st.session_state.clear()
+            st.rerun()
 
 
 try:
     client = api()
 except Exception:
-    st.error("Could not initialize backend API client. Please ensure FastAPI is running.")
+    st.error(
+        "The backend API client could not start. Check that the FastAPI "
+        f"service is running at {BACKEND_URL}."
+    )
     st.stop()
 
 
-# -----------------------------------------------------------------------------
-# OVERVIEW (DASHBOARD) - MATCHES UI_REFERENCE.PNG
-# -----------------------------------------------------------------------------
+# =============================================================================
+# OVERVIEW
+# =============================================================================
+
 def dashboard():
     try:
         data = client.dashboard()
     except Exception as e:
-        st.error(f"Backend unavailable: {e}")
+        st.error(f"The backend did not respond: {e}")
         st.stop()
 
     stats = data["stats"]
 
-    # Hero Banner (directly matching UI_REFERENCE.png)
-    h_col1, h_col2 = st.columns([1.5, 0.9], gap="large")
-    with h_col1:
-        st.markdown("""
-        <div class="hero">
-          <span class="eyebrow">SIH 2026 • Problem Statement 26100</span>
-          <h1>Review tender documents<br>in one workspace.</h1>
-          <p>SendaTender helps a vendor upload tender and eligibility documents together. The system classifies files, runs prototype checks, creates a compliance report, and sends the package to an officer for review.</p>
-        </div>
-        """, unsafe_allow_html=True)
-        btn_col1, btn_col2 = st.columns([1, 1])
-        with btn_col1:
-            if st.button("Upload package →", type="primary", use_container_width=True):
-                st.session_state["pending_nav"] = "New Verification"
+    main_col, side_col = st.columns([1.55, 0.85], gap="large")
+
+    with main_col:
+        ui(
+            """
+            <div class="docket">
+            <h1>Review a tender package in one place.</h1>
+            <p>A vendor submits the tender and its eligibility documents
+            together. SendaTender sorts the files, runs the prototype checks,
+            builds a compliance report, and hands the package to an officer
+            for a decision.</p>
+            </div>
+            """
+        )
+
+        st.write("")
+
+        act_left, act_right = st.columns(2)
+
+        with act_left:
+            if st.button(
+                "Upload a package", type="primary", use_container_width=True
+            ):
+                st.session_state["pending_nav"] = "New verification"
                 st.rerun()
-        with btn_col2:
+
+        with act_right:
             if st.button("Open officer desk", use_container_width=True):
-                st.session_state["pending_nav"] = "Verification History"
+                st.session_state["pending_nav"] = "Verification history"
                 st.rerun()
 
-    with h_col2:
-        # Illustration matching UI_REFERENCE.png right card with dynamic counts
-        st.markdown(f"""
-        <div class="metric-card" style="height:100%;min-height:260px;padding:26px;background:linear-gradient(145deg,#F8FBFF,#EEF7F6);display:flex;flex-direction:column;justify-content:center;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-            <span class="metric-label">PROCUREMENT DESK</span>
-            <span class="status-pill status-pass">Active</span>
-          </div>
-          <div style="font-size:1.2rem;font-weight:800;color:var(--navy);margin-bottom:12px;">Officer Evaluation Unit</div>
-          <div style="display:flex;justify-content:space-between;padding:10px 0;border-top:1px solid #DCE5EE;">
-            <span class="small-muted">Active vendor bids</span>
-            <b style="color:var(--navy);">{stats['active_bidders']:02d}</b>
-          </div>
-          <div style="display:flex;justify-content:space-between;padding:10px 0;border-top:1px solid #DCE5EE;">
-            <span class="small-muted">Awaiting review</span>
-            <b style="color:var(--navy);">{stats['pending']:02d}</b>
-          </div>
-          <div style="display:flex;justify-content:space-between;padding:10px 0;border-top:1px solid #DCE5EE;">
-            <span class="small-muted">Decisions recorded</span>
-            <b style="color:var(--teal);">{stats['verified']:02d}</b>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
+    with side_col:
+        ui(
+            f"""
+            <div class="standing">
+            <div class="standing-head">
+            <span class="standing-title">Officer evaluation unit</span>
+            {pill("Active")}
+            </div>
+            <div class="standing-row"><span>Active vendor bids</span>
+            <b>{stats['active_bidders']:02d}</b></div>
+            <div class="standing-row"><span>Awaiting review</span>
+            <b>{stats['pending']:02d}</b></div>
+            <div class="standing-row"><span>Decisions recorded</span>
+            <b>{stats['verified']:02d}</b></div>
+            </div>
+            """
+        )
 
-    st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
+    st.write("")
 
-    # Metric Cards Grid (backed by dynamic SQLite data)
-    cols = st.columns(4)
-    active_bidders_val = stats["active_bidders"]
-    avg_compliance_val = f'{stats["average_compliance"]}%'
-    ready_to_review_val = stats["pending"]
-    high_risk_val = stats["high_risk"]
+    active = stats["active_bidders"]
+    pending = stats["pending"]
+    high_risk = stats["high_risk"]
 
-    bidders_subtext = f"+{active_bidders_val} this week" if active_bidders_val > 0 else "No active bidders"
-    compliance_subtext = "Across submitted packages" if active_bidders_val > 0 else "No packages submitted"
-    ready_subtext = "Awaiting officer decision" if ready_to_review_val > 0 else "0 awaiting review"
-    risk_subtext = "Requires officer attention" if high_risk_val > 0 else "0 flagged high risk"
-
-    cards = [
-        ("ACTIVE BIDDERS", active_bidders_val, bidders_subtext, "Across active procurement runs"),
-        ("AVG. COMPLIANCE", avg_compliance_val, compliance_subtext, "Average checklist compliance score"),
-        ("READY TO REVIEW", ready_to_review_val, ready_subtext, "Packages ready for final ruling"),
-        ("HIGH RISK", high_risk_val, risk_subtext, "Bidders with flagged discrepancies"),
+    tiles = [
+        (
+            "Active bidders",
+            f"{active}",
+            "Across open procurement runs" if active else "Nothing open yet",
+            False,
+        ),
+        (
+            "Average compliance",
+            f'{stats["average_compliance"]}%',
+            "Across submitted packages" if active else "No packages submitted",
+            False,
+        ),
+        (
+            "Ready to review",
+            f"{pending}",
+            "Awaiting an officer decision" if pending else "Nothing waiting",
+            False,
+        ),
+        (
+            "High risk",
+            f"{high_risk}",
+            "Flagged discrepancies" if high_risk else "None flagged",
+            bool(high_risk),
+        ),
     ]
 
-    for col, (label, val, helptext, tooltip) in zip(cols, cards):
+    for col, (label, value, note, attention) in zip(st.columns(4), tiles):
         with col:
-            st.markdown(f"""
-            <div class="metric-card" title="{tooltip}">
-              <div class="metric-label">{label}</div>
-              <div class="metric-value">{val}</div>
-              <div class="metric-help">{helptext}</div>
-            </div>
-            """, unsafe_allow_html=True)
+            ui(
+                f"""
+                <div class="tile{' attention' if attention else ''}">
+                <div class="tile-label">{escape(label)}</div>
+                <div class="tile-value">{escape(value)}</div>
+                <div class="tile-note">{escape(note)}</div>
+                </div>
+                """
+            )
 
-    st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
+    st.write("")
+    st.subheader("How a package moves through the desk")
 
-    # 3-Step Workflow Cards (directly matching UI_REFERENCE.png)
-    st.markdown('<div class="section-title">End-to-End Procurement Workflow</div>', unsafe_allow_html=True)
-    w_cols = st.columns(3)
-    workflows = [
-        ("1", "step-1", "Vendor submission", "Upload NIT/RFP, BOQ, GST, PAN, Udyam, ITR, bank proof, and technical documents in one package."),
-        ("2", "step-2", "Automated screening", "The prototype identifies documents, checks required items, calculates compliance, and explains failed checks."),
-        ("3", "step-3", "Officer decision", "Officers view the report, bidder history, and audit trail before approving, requesting review, or flagging a bidder."),
+    stages = [
+        (
+            "Stage 1",
+            "Vendor submits",
+            "NIT or RFP, BOQ, GST, PAN, Udyam, ITR, bank proof and technical "
+            "documents go up as a single package.",
+        ),
+        (
+            "Stage 2",
+            "System screens",
+            "Files are identified, required items are checked off, a compliance "
+            "score is calculated, and every failed check is explained.",
+        ),
+        (
+            "Stage 3",
+            "Officer decides",
+            "The officer reads the report, the bidder's history and the audit "
+            "trail, then qualifies, disqualifies or holds the bid.",
+        ),
     ]
-    for col, (num, cls, title, body) in zip(w_cols, workflows):
-        with col:
-            st.markdown(f"""
-            <div class="workflow">
-              <div class="step {cls}">{num}</div>
-              <h4>{title}</h4>
-              <p>{body}</p>
-            </div>
-            """, unsafe_allow_html=True)
 
-    # Recent Verifications Section
-    st.markdown('<div class="section-title">Recent Verifications</div>', unsafe_allow_html=True)
+    for col, (no, title, body) in zip(st.columns(3), stages):
+        with col:
+            ui(
+                f"""
+                <div class="stage">
+                <span class="stage-no">{no}</span>
+                <h4>{escape(title)}</h4>
+                <p>{escape(body)}</p>
+                </div>
+                """
+            )
+
+    st.write("")
+    st.subheader("Recent verifications")
+
     recent = data.get("recent", [])
+
     if not recent:
-        st.info("No verification records in database yet. Click 'Upload package →' above to start your first verification.")
-    else:
-        for item in recent:
-            c1, c2, c3, c4, c5, c6 = st.columns([2.2, 1.4, 0.8, 0.9, 1.3, 0.9])
-            c1.markdown(f"**{item['bidder_name']}**<br><span class='small-muted'>PAN: {item['bidder_pan']} · {item['tender_filename']}</span>", unsafe_allow_html=True)
-            c2.write(item["timestamp"][:16].replace("T", " "))
-            c3.write(score_text(item["score"]))
-            c4.markdown(pill(item["risk"]), unsafe_allow_html=True)
-            c5.write(item["decision"])
-            if c6.button("Review", key=f"dash_{item['id']}", use_container_width=True):
-                st.session_state["selected_verification"] = item["id"]
-                st.session_state["nav_page"] = "Verification Review"
-                st.rerun()
+        st.info(
+            "No verifications yet. Upload a package to run the first one."
+        )
+        return
+
+    for item in recent:
+        c1, c2, c3, c4, c5, c6 = st.columns([2.2, 1.4, 0.8, 0.9, 1.3, 0.9])
+
+        c1.markdown(
+            f"**{escape(str(item['bidder_name']))}**  \n"
+            f"<span class='meta'>PAN <span class='mono'>"
+            f"{escape(str(item['bidder_pan']))}</span> &nbsp; "
+            f"{escape(str(item['tender_filename']))}</span>",
+            unsafe_allow_html=True,
+        )
+        c2.write(stamp(item["timestamp"]))
+        c3.write(score_text(item["score"]))
+        c4.markdown(pill(item["risk"]), unsafe_allow_html=True)
+        c5.write(item["decision"])
+
+        if c6.button("Review", key=f"dash_{item['id']}", use_container_width=True):
+            st.session_state["selected_verification"] = item["id"]
+            st.session_state["nav_page"] = "Verification review"
+            st.rerun()
 
 
-# -----------------------------------------------------------------------------
-# NEW VERIFICATION (ONE TENDER + MULTIPLE VENDOR BIDS)
-# -----------------------------------------------------------------------------
+# =============================================================================
+# NEW VERIFICATION
+# =============================================================================
+
 def new_verification():
-    st.markdown('<div class="section-title" style="font-size:1.85rem;margin-top:0;">New Verification</div>', unsafe_allow_html=True)
-    st.caption("Upload one tender once, then analyse multiple vendor bids against the same procurement context. 50 MB max per PDF.")
+    st.header("New verification")
+    st.caption(
+        "Upload the tender once, then run every competing bid against it. "
+        f"Each PDF can be up to {MAX_MB} MB."
+    )
 
     tender = st.file_uploader(
-        "Tender / RFP Document (PDF)",
+        "Tender or RFP document (PDF)",
         type=["pdf"],
         key="uploader_tender",
-        help="The official tender or RFP containing mandatory eligibility and technical requirements.",
+        help="The official tender containing the eligibility and technical requirements.",
     )
+
     tender_oversized = False
+
     if tender:
         size_mb = len(tender.getvalue()) / (1024 * 1024)
         if size_mb > MAX_MB:
-            st.error(f"❌ {tender.name} exceeds the 50 MB per-file limit ({size_mb:.1f} MB).")
+            st.error(
+                f"{tender.name} is {size_mb:.1f} MB, over the {MAX_MB} MB limit. "
+                "Compress it or split it before uploading."
+            )
             tender_oversized = True
         else:
-            st.success(f"✓ Tender: {tender.name} ({size_mb:.2f} MB)")
+            st.success(f"Tender loaded: {tender.name} ({size_mb:.2f} MB)")
 
     vendors = st.file_uploader(
-        "Vendor Bid Submissions — upload one or more (PDF)",
+        "Vendor bid submissions (PDF, one or more)",
         type=["pdf"],
         accept_multiple_files=True,
         key="uploader_vendors",
-        help="The bid documents submitted by competing vendors. Each bidder must have a PAN.",
+        help="The bids submitted by competing vendors. Each bidder needs a PAN.",
     )
 
     if not vendors:
-        st.info("💡 Add at least one vendor bid PDF above to configure bidder details and run verifications.")
+        st.info("Add at least one vendor bid to enter bidder details and run the checks.")
         return
 
-    st.markdown('<div class="section-title">Bidder Information</div>', unsafe_allow_html=True)
-    st.caption("Enter each bidder's details. The PAN is used for cross-checking against simulated government databases.")
+    st.subheader("Bidder details")
+    st.caption(
+        "The PAN is what the prototype uses to cross-check the simulated "
+        "government registries."
+    )
 
-    pans = []
-    names = []
-    oversized_files = []
+    pans, names, oversized_files, bad_pans = [], [], [], []
 
     for i, f in enumerate(vendors):
         f_size_mb = len(f.getvalue()) / (1024 * 1024)
         if f_size_mb > MAX_MB:
             oversized_files.append(f"{f.name} ({f_size_mb:.1f} MB)")
 
-        st.markdown(f"""
-        <div class="queue-card">
-          <b>Vendor Bid #{i+1}</b>: {f.name} &nbsp;·&nbsp; <span class="small-muted">{f_size_mb:.2f} MB</span>
-        </div>
-        """, unsafe_allow_html=True)
+        ui(
+            f"""
+            <div class="record">
+            <b>Bid {i + 1}</b> &nbsp; {escape(f.name)}
+            <span class="meta">&nbsp; {f_size_mb:.2f} MB</span>
+            </div>
+            """
+        )
 
-        col_name, col_pan, col_helper = st.columns([1.2, 1.2, 0.8])
+        col_name, col_pan, col_demo = st.columns([1.2, 1.2, 0.8])
+
         with col_name:
-            default_name = st.session_state.get(f"name_val_{i}", "")
             v_name = st.text_input(
-                f"Bidder Name #{i+1}",
-                value=default_name,
+                f"Bidder name {i + 1}",
+                value=st.session_state.get(f"name_val_{i}", ""),
                 key=f"input_name_{i}",
-                placeholder="e.g. Sample Vendor Pvt Ltd",
+                placeholder="Sample Vendor Pvt Ltd",
             )
             names.append(v_name)
 
         with col_pan:
-            default_pan = st.session_state.get(f"pan_val_{i}", "")
-            v_pan = st.text_input(
-                f"Bidder PAN #{i+1}",
-                value=default_pan,
-                key=f"input_pan_{i}",
-                placeholder="e.g. AABCU1234C",
-            ).upper().strip()
+            v_pan = (
+                st.text_input(
+                    f"Bidder PAN {i + 1}",
+                    value=st.session_state.get(f"pan_val_{i}", ""),
+                    key=f"input_pan_{i}",
+                    placeholder="AABCU1234C",
+                )
+                .upper()
+                .strip()
+            )
             pans.append(v_pan)
 
-        with col_helper:
-            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-            if st.button("Use Demo PAN", key=f"demo_pan_btn_{i}", help="Fill with verified demo vendor AABCU1234C"):
+            if v_pan and not PAN_RE.match(v_pan):
+                bad_pans.append(i + 1)
+
+        with col_demo:
+            st.write("")
+            if st.button(
+                "Use demo details",
+                key=f"demo_pan_btn_{i}",
+                help="Fills in the verified demo vendor AABCU1234C.",
+            ):
                 st.session_state[f"pan_val_{i}"] = "AABCU1234C"
                 st.session_state[f"name_val_{i}"] = "Sample Vendor Pvt Ltd"
                 st.rerun()
 
     missing_pans = [i + 1 for i, p in enumerate(pans) if not p]
+
     if missing_pans:
-        st.warning(f"⚠️ Please enter PAN for Vendor Bid #{', #'.join(map(str, missing_pans))}.")
+        st.warning(
+            "Add a PAN for bid "
+            + ", ".join(str(n) for n in missing_pans)
+            + "."
+        )
+
+    if bad_pans:
+        st.warning(
+            "PAN format looks wrong for bid "
+            + ", ".join(str(n) for n in bad_pans)
+            + ". A PAN is five letters, four digits, then one letter."
+        )
 
     if oversized_files:
-        st.error(f"❌ Files exceeding 50 MB limit: {', '.join(oversized_files)}")
+        st.error(f"Over the {MAX_MB} MB limit: " + ", ".join(oversized_files))
 
-    can_submit = bool(tender and not tender_oversized and vendors and not oversized_files and not missing_pans)
+    can_submit = bool(
+        tender
+        and not tender_oversized
+        and vendors
+        and not oversized_files
+        and not missing_pans
+        and not bad_pans
+    )
 
-    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
-    if st.button("Analyse All Bids →", type="primary", use_container_width=True, disabled=not can_submit):
+    st.write("")
+
+    if st.button(
+        "Run the checks",
+        type="primary",
+        use_container_width=True,
+        disabled=not can_submit,
+    ):
         try:
-            with st.status("Running SendaTender Verification Pipeline…", expanded=True) as status:
-                st.write("1. Reading tender document and extracting mandatory eligibility requirements…")
-                st.write("2. Checking tender-bid document alignment gate…")
-                st.write("3. Cross-referencing bidder PAN against simulated government registries (Udyam, GSTN, EPFO)…")
-                st.write("4. Scanning for prompt injection guardrails and evaluating evidence…")
+            with st.status("Running the verification pipeline", expanded=True) as status:
+                st.write("Reading the tender and pulling out mandatory requirements")
+                st.write("Checking that each bid belongs to this tender")
+                st.write("Cross-checking PANs against the simulated registries")
+                st.write("Screening for prompt injection and weighing the evidence")
+
                 batch_res = client.batch_verify(tender, vendors, pans, names)
-                status.update(label=f"✓ Verification complete! Processed {len(batch_res['results'])} bidder(s).", state="complete")
+
+                status.update(
+                    label=f"Done. {len(batch_res['results'])} bid(s) processed.",
+                    state="complete",
+                )
 
             st.session_state["last_batch"] = batch_res
-            st.session_state["pending_nav"] = "Verification History"
+            st.session_state["pending_nav"] = "Verification history"
             st.rerun()
+
         except APIError as err:
-            st.error(f"Verification Pipeline Error: {err}")
+            st.error(f"The pipeline stopped: {err}")
         except Exception as e:
-            st.error(f"Failed to process verification batch: {e}")
+            st.error(f"The batch could not be processed: {e}")
 
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # VERIFICATION HISTORY
-# -----------------------------------------------------------------------------
+# =============================================================================
+
 def verification_history():
-    st.markdown('<div class="section-title" style="font-size:1.85rem;margin-top:0;">Verification History</div>', unsafe_allow_html=True)
+    st.header("Verification history")
+
     try:
         rows = client.history()
     except Exception as e:
-        st.error(f"Could not load verification records: {e}")
+        st.error(f"Records could not be loaded: {e}")
         return
 
     if "last_batch" in st.session_state:
         b = st.session_state["last_batch"]
-        st.success(f"✓ Verification Batch **{b.get('batch_id')}** completed with {b.get('count')} bidder(s). Click 'View Finding' below to inspect evidence.")
+        st.success(
+            f"Batch {b.get('batch_id')} finished with {b.get('count')} bid(s). "
+            "Open any row below to inspect the evidence."
+        )
 
     if not rows:
-        st.info("No stored verifications found. Start a verification from the New Verification tab.")
+        st.info("No stored verifications. Start one from New verification.")
         return
 
-    st.caption(f"Showing {len(rows)} verification record(s). All records are persisted in the SQLite backend.")
+    st.caption(f"{len(rows)} record(s), stored in the SQLite backend.")
 
     for item in rows:
         r = item["result"]
-        score = r.get("compliance_score")
-        risk = r.get("risk_level")
         blocked = r.get("blocked", False)
 
         cols = st.columns([2.3, 1.2, 0.8, 0.9, 1.3, 0.9])
+
         cols[0].markdown(
-            f"**{item['bidder_name']}**<br>"
-            f"<span class='small-muted'>PAN: {item['bidder_pan']} · Bid: {item['vendor_filename']}</span>",
+            f"**{escape(str(item['bidder_name']))}**  \n"
+            f"<span class='meta'>PAN <span class='mono'>"
+            f"{escape(str(item['bidder_pan']))}</span> &nbsp; "
+            f"{escape(str(item['vendor_filename']))}</span>",
             unsafe_allow_html=True,
         )
-        cols[1].write(item["timestamp"][:16].replace("T", " "))
-        cols[2].write(score_text(score) if not blocked else "—")
-        cols[3].markdown(pill("BLOCKED" if blocked else risk), unsafe_allow_html=True)
+        cols[1].write(stamp(item["timestamp"]))
+        cols[2].write("—" if blocked else score_text(r.get("compliance_score")))
+        cols[3].markdown(
+            pill("Blocked" if blocked else r.get("risk_level")),
+            unsafe_allow_html=True,
+        )
         cols[4].write(item["officer_decision"])
 
-        if cols[5].button("View", key=f"hist_{item['id']}", use_container_width=True):
+        if cols[5].button("Open", key=f"hist_{item['id']}", use_container_width=True):
             st.session_state["selected_verification"] = item["id"]
-            st.session_state["nav_page"] = "Verification Review"
+            st.session_state["nav_page"] = "Verification review"
             st.rerun()
 
 
-# -----------------------------------------------------------------------------
-# VERIFICATION REVIEW (EVIDENCE-FIRST FINDINGS + PDF VIEWER)
-# -----------------------------------------------------------------------------
+# =============================================================================
+# VERIFICATION REVIEW
+# =============================================================================
+
 def verification_review():
     vid = st.session_state.get("selected_verification")
+
     if not vid:
-        st.info("Select a verification from the History tab to review evidence.")
+        st.info("Pick a verification from the history to review its evidence.")
         return
 
     try:
         item = client.verification(vid)
     except Exception as e:
-        st.error(f"Failed to fetch verification #{vid}: {e}")
+        st.error(f"Verification {vid} could not be loaded: {e}")
         return
 
     r = item["result"]
 
-    col_back, _ = st.columns([1, 4])
-    with col_back:
-        if st.button("← Back to History"):
-            st.session_state["nav_page"] = "Verification History"
+    back_col, _ = st.columns([1, 4])
+    with back_col:
+        if st.button("Back to history"):
+            st.session_state["nav_page"] = "Verification history"
             st.session_state.pop("selected_verification", None)
             st.rerun()
 
-    st.markdown(f'<div class="section-title" style="font-size:2rem;margin-top:8px;">{item["bidder_name"]}</div>', unsafe_allow_html=True)
-    st.caption(f"PAN: {item['bidder_pan']}  ·  Tender: {item['tender_filename']}  ·  Bid: {item['vendor_filename']}  ·  Run ID: #{item['id']}")
+    st.header(item["bidder_name"])
 
-    # Handle Blocked Submissions (e.g. Mismatched Documents)
+    ui(
+        f"""
+        <div class="record">
+        <span class="meta">PAN</span> <span class="mono">{escape(str(item['bidder_pan']))}</span>
+        &nbsp;&nbsp;&nbsp;
+        <span class="meta">Tender</span> {escape(str(item['tender_filename']))}
+        &nbsp;&nbsp;&nbsp;
+        <span class="meta">Bid</span> {escape(str(item['vendor_filename']))}
+        &nbsp;&nbsp;&nbsp;
+        <span class="meta">Run</span> <span class="mono">#{escape(str(item['id']))}</span>
+        </div>
+        """
+    )
+
+    st.write("")
+
     if r.get("blocked"):
-        st.error("🚨 VERIFICATION BLOCKED BY ALIGNMENT GATE")
-        st.markdown(f"**Reason:** {r.get('block_reason') or r.get('error') or 'Document alignment or verification failed.'}")
-        st.info("The uploaded bid does not appear to correspond to this tender document. Please verify the files and resubmit.")
+        st.error("Verification blocked at the alignment gate.")
+        st.markdown(
+            "**Reason:** "
+            + str(
+                r.get("block_reason")
+                or r.get("error")
+                or "The document alignment check did not pass."
+            )
+        )
+        st.info(
+            "This bid does not appear to belong to the tender it was filed "
+            "against. Check the files and resubmit the package."
+        )
         return
 
-    # Metrics Summary
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Compliance Score", score_text(r.get("compliance_score")))
-    m2.metric("Risk Level", r.get("risk_level", "Unknown"))
-    m3.metric("Requirements Checked", len(r.get("requirement_results", [])))
-    m4.metric("Officer Decision", item["officer_decision"])
+    m1.metric("Compliance score", score_text(r.get("compliance_score")))
+    m2.metric("Risk level", r.get("risk_level", "Unknown"))
+    m3.metric("Requirements checked", len(r.get("requirement_results", [])))
+    m4.metric("Officer decision", item["officer_decision"])
 
-    # Warnings / Guardrails
     if r.get("alignment_warning"):
-        st.warning(f"⚠️ {r['alignment_warning']}")
+        st.warning(r["alignment_warning"])
+
     if r.get("injection_hits"):
-        st.error(f"🛡️ Prompt Injection Guardrail Triggered: Discovered {len(r['injection_hits'])} suspicious phrase(s): " + ", ".join(r["injection_hits"]))
+        st.error(
+            "Prompt injection guard triggered on "
+            f"{len(r['injection_hits'])} phrase(s): "
+            + ", ".join(r["injection_hits"])
+        )
 
     if r.get("flags"):
-        st.markdown("#### 🚩 Flags Identified")
+        st.subheader("Flags raised")
         for flag in r["flags"]:
-            st.markdown(f"• **{flag}**")
+            st.markdown(f"- {flag}")
 
-    # AI Advisory Recommendation
-    st.markdown('<div class="section-title">AI Recommendation (Advisory Only)</div>', unsafe_allow_html=True)
-    rec = r.get("recommendation", "No recommendation provided.")
-    st.info(f"📋 {rec}")
+    st.subheader("Recommendation")
+    st.caption("Advisory only. The officer makes the ruling.")
+    st.info(r.get("recommendation", "No recommendation was returned."))
 
-    # Tabs for Findings and Document Viewer
-    tab_findings, tab_evidence_doc = st.tabs(["📋 Requirement Findings", "📄 Document & Evidence Viewer"])
+    tab_findings, tab_docs = st.tabs(["Requirement findings", "Documents"])
 
     with tab_findings:
         reqs = r.get("requirement_results", [])
+
         if not reqs:
             st.info("No requirement findings were returned for this submission.")
         else:
-            for i, req in enumerate(reqs):
+            for req in reqs:
                 status = str(req.get("status", "UNVERIFIABLE")).upper()
-                cls = "pass" if status == "PASS" else "fail" if status == "FAIL" else "review"
-                category = req.get("category", "Other")
-                cat_help = req.get("category_help", "")
+                cls = (
+                    "pass"
+                    if status == "PASS"
+                    else "fail"
+                    if status == "FAIL"
+                    else "review"
+                )
 
-                st.markdown(f"""
-                <div class="finding {cls}">
-                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                    <b style="font-size:1.05rem;">{req.get('requirement', 'Requirement')}</b>
+                ui(
+                    f"""
+                    <div class="finding {cls}">
+                    <div class="finding-head">
+                    <b>{escape(str(req.get('requirement', 'Requirement')))}</b>
                     {pill(status)}
-                  </div>
-                  <span class="small-muted" title="{cat_help}">Category: <b>{category}</b></span>
-                  <p style="margin:10px 0 6px;line-height:1.5;">{req.get('evidence', 'No evidence description available.')}</p>
-                </div>
-                """, unsafe_allow_html=True)
+                    </div>
+                    <span class="meta" title="{escape(str(req.get('category_help', '')))}">
+                    {escape(str(req.get('category', 'Other')))}</span>
+                    <p>{escape(str(req.get('evidence', 'No evidence recorded.')))}</p>
+                    </div>
+                    """
+                )
 
-    with tab_evidence_doc:
-        st.markdown("#### Embedded Document Viewer")
-        st.caption("Inspect the original vendor bid and tender PDF directly within the workspace.")
+    with tab_docs:
+        st.caption("Read the original bid and tender inside the workspace.")
 
-        doc_kind = st.radio("Select Document to View", ["Vendor Bid Document", "Tender RFP Document"], horizontal=True)
-        kind_key = "vendor" if doc_kind == "Vendor Bid Document" else "tender"
-        curr_filename = item["vendor_filename"] if kind_key == "vendor" else item["tender_filename"]
+        doc_kind = st.radio(
+            "Document",
+            ["Vendor bid", "Tender or RFP"],
+            horizontal=True,
+        )
+
+        kind_key = "vendor" if doc_kind == "Vendor bid" else "tender"
+        curr_filename = (
+            item["vendor_filename"] if kind_key == "vendor" else item["tender_filename"]
+        )
 
         try:
             pdf_data = client.document(vid, kind_key)
-            col_dl, _ = st.columns([1, 2])
-            with col_dl:
+
+            dl_col, _ = st.columns([1, 2])
+            with dl_col:
                 st.download_button(
-                    label=f"⬇️ Download {doc_kind} ({len(pdf_data)/1024/1024:.2f} MB)",
+                    label=f"Download ({len(pdf_data) / 1024 / 1024:.2f} MB)",
                     data=pdf_data,
                     file_name=curr_filename,
                     mime="application/pdf",
                     use_container_width=True,
                 )
-            render_pdf(pdf_data, height=620)
-        except Exception as e:
-            st.warning(f"Could not load PDF document preview: {e}")
 
-    # Officer Review & Decision (Core Acceptance Criteria)
-    st.markdown('<div class="section-title">Officer Decision & Review</div>', unsafe_allow_html=True)
-    st.caption("The authorized procurement officer makes the final qualification ruling. AI recommendations are strictly advisory.")
+            render_pdf(pdf_data, height=620)
+
+        except Exception as e:
+            st.warning(f"The preview could not be loaded: {e}")
+
+    st.subheader("Officer decision")
+    st.caption("The officer records the final qualification ruling.")
 
     if item["officer_decision"] != "Not yet decided":
-        st.success(f"✓ Current Decision Recorded: **{item['officer_decision']}**")
+        st.success(f"Recorded decision: {item['officer_decision']}")
+
         if item.get("officer_notes"):
-            st.markdown(f"**Officer Notes:** {item['officer_notes']}")
-        st.caption(f"Recorded by Officer: {item.get('officer_id') or 'PO-001'}")
+            st.markdown(f"**Notes:** {item['officer_notes']}")
 
-    st.markdown("##### Record / Update Decision")
-    decision_options = ["Qualify bidder", "Disqualify bidder", "Hold for further review"]
-    default_idx = decision_options.index(item["officer_decision"]) if item["officer_decision"] in decision_options else 0
+        st.caption(f"Recorded by {item.get('officer_id') or 'PO-001'}")
 
-    decision = st.radio("Final Officer Decision", decision_options, index=default_idx, horizontal=True)
-    notes = st.text_area(
-        "Officer Remarks & Decision Rationale",
-        value=item.get("officer_notes", ""),
-        placeholder="Enter formal justification, conditions for qualification, or reasons for disqualification...",
+    decision_options = [
+        "Qualify bidder",
+        "Disqualify bidder",
+        "Hold for further review",
+    ]
+
+    default_idx = (
+        decision_options.index(item["officer_decision"])
+        if item["officer_decision"] in decision_options
+        else 0
     )
 
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("💾 Save Officer Decision", type="primary", use_container_width=True):
+    decision = st.radio(
+        "Ruling", decision_options, index=default_idx, horizontal=True
+    )
+
+    notes = st.text_area(
+        "Rationale",
+        value=item.get("officer_notes", "") or "",
+        placeholder="Justification, conditions for qualification, or grounds for disqualification.",
+    )
+
+    save_col, report_col = st.columns(2)
+
+    with save_col:
+        if st.button("Save decision", type="primary", use_container_width=True):
             try:
                 client.decision(vid, decision, notes)
-                st.success("Decision recorded to the immutable SQLite audit trail.")
+                st.success("Decision saved to the audit trail.")
                 st.rerun()
             except Exception as e:
-                st.error(f"Failed to record decision: {e}")
+                st.error(f"The decision was not saved: {e}")
 
-    with c2:
+    with report_col:
         try:
             report_pdf = client.report(vid)
             st.download_button(
-                "📄 Download Compliance PDF Report",
+                "Download compliance report",
                 report_pdf,
                 file_name=f"SendaTender_Report_{item['bidder_pan']}_{vid}.pdf",
                 mime="application/pdf",
                 use_container_width=True,
             )
         except Exception as e:
-            st.caption(f"Report generation unavailable: {e}")
+            st.caption(f"Report generation is unavailable: {e}")
 
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # BIDDER DIRECTORY
-# -----------------------------------------------------------------------------
+# =============================================================================
+
 def bidder_directory():
-    st.markdown('<div class="section-title" style="font-size:1.85rem;margin-top:0;">Bidder Directory</div>', unsafe_allow_html=True)
-    st.caption("Track historic vendor evaluations, compliance performance, and recurring flags across multiple procurement cycles.")
+    st.header("Bidder directory")
+    st.caption(
+        "Past evaluations, compliance performance and repeat flags across "
+        "procurement cycles."
+    )
 
     try:
         rows = client.bidders()
     except Exception as e:
-        st.error(f"Failed to load bidder directory: {e}")
+        st.error(f"The directory could not be loaded: {e}")
         return
 
-    search = st.text_input("Search Bidders by Name or PAN", placeholder="Search by name, company, or PAN...").strip()
+    search = st.text_input(
+        "Search", placeholder="Bidder name or PAN"
+    ).strip()
+
     filtered = [
-        x for x in rows
-        if not search or search.lower() in (x["bidder_name"] + " " + x["bidder_pan"]).lower()
+        x
+        for x in rows
+        if not search
+        or search.lower() in f"{x['bidder_name']} {x['bidder_pan']}".lower()
     ]
 
     if not filtered:
-        st.info("No bidders found matching your search query.")
+        st.info("No bidders match that search.")
         return
 
     for row in filtered:
-        with st.expander(f"🏢 {row['bidder_name']}  ·  PAN: {row['bidder_pan']}  ·  {row['verifications']} Verification(s)"):
+        with st.expander(
+            f"{row['bidder_name']}  —  {row['bidder_pan']}  —  "
+            f"{row['verifications']} verification(s)"
+        ):
             try:
                 history_data = client.bidder(row["bidder_pan"])["history"]
-                st.markdown("##### Historic Verification Runs")
+
                 for hist_item in history_data:
                     hr = hist_item["result"]
                     c1, c2, c3, c4 = st.columns([2.2, 1.1, 1, 1.2])
-                    c1.markdown(f"**{hist_item['tender_filename']}**<br><span class='small-muted'>{hist_item['timestamp'][:10]}</span>", unsafe_allow_html=True)
+
+                    c1.markdown(
+                        f"**{escape(str(hist_item['tender_filename']))}**  \n"
+                        f"<span class='meta'>{escape(str(hist_item['timestamp'])[:10])}</span>",
+                        unsafe_allow_html=True,
+                    )
                     c2.write(score_text(hr.get("compliance_score")))
                     c3.markdown(pill(hr.get("risk_level")), unsafe_allow_html=True)
                     c4.write(hist_item["officer_decision"])
 
-                # Aggregated discrepancies / flags
                 all_flags = []
                 for hist_item in history_data:
                     for f in hist_item["result"].get("flags", []):
@@ -2000,43 +1381,60 @@ def bidder_directory():
                             all_flags.append(f)
 
                 if all_flags:
-                    st.markdown("##### Historic Discrepancies & Red Flags")
+                    st.markdown("**Repeat flags**")
                     for flg in all_flags:
-                        st.markdown(f"• {flg}")
+                        st.markdown(f"- {flg}")
+
             except Exception as e:
-                st.error(f"Failed to fetch bidder history: {e}")
+                st.error(f"This bidder's history could not be loaded: {e}")
 
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # AUDIT TRAIL
-# -----------------------------------------------------------------------------
+# =============================================================================
+
 def audit_trail():
-    st.markdown('<div class="section-title" style="font-size:1.85rem;margin-top:0;">Protected Audit Trail 🔒</div>', unsafe_allow_html=True)
-    st.caption("Immutable record of all officer decisions, timestamps, risk scores, and AI recommendations.")
+    st.header("Audit trail")
+    st.caption(
+        "Every officer decision, with its timestamp, score, risk level and the "
+        "recommendation it was weighed against."
+    )
 
     try:
         rows = client.audit()
     except Exception as e:
-        st.error(f"Could not load audit trail: {e}")
+        st.error(f"The audit trail could not be loaded: {e}")
         return
 
     if not rows:
-        st.info("No officer decisions have been committed to the audit trail yet.")
+        st.info("No decisions have been committed yet.")
         return
 
     for entry in rows:
-        with st.expander(f"📅 {entry['timestamp'][:19].replace('T', ' ')} · {entry['bidder_name']} · {entry['officer_decision']}"):
-            st.markdown(f"**Authorized Officer:** `{entry.get('officer_id') or 'PO-001'}`")
-            st.markdown(f"**Compliance Score:** {entry['compliance_score']}/100  ·  **Risk Level:** {pill(entry['risk_level'])}", unsafe_allow_html=True)
-            st.markdown(f"**AI Recommendation:** {entry.get('ai_recommendation', '—')}")
+        with st.expander(
+            f"{entry['timestamp'][:19].replace('T', ' ')}  —  "
+            f"{entry['bidder_name']}  —  {entry['officer_decision']}"
+        ):
+            st.markdown(f"**Officer:** `{entry.get('officer_id') or 'PO-001'}`")
+
+            st.markdown(
+                f"**Compliance score:** {entry['compliance_score']}/100 &nbsp; "
+                f"**Risk:** {pill(entry['risk_level'])}",
+                unsafe_allow_html=True,
+            )
+
+            st.markdown(
+                f"**Recommendation:** {entry.get('ai_recommendation', '—')}"
+            )
+
             if entry.get("officer_notes"):
-                st.markdown(f"**Officer Justification:** {entry['officer_notes']}")
+                st.markdown(f"**Rationale:** {entry['officer_notes']}")
 
             if entry.get("verification_id"):
                 try:
                     pdf_bytes = client.report(entry["verification_id"])
                     st.download_button(
-                        "⬇️ Download Certified Compliance Report",
+                        "Download compliance report",
                         pdf_bytes,
                         file_name=f"SendaTender_Audit_{entry['id']}.pdf",
                         mime="application/pdf",
@@ -2046,48 +1444,52 @@ def audit_trail():
                     pass
 
 
-# -----------------------------------------------------------------------------
+# =============================================================================
 # OFFICER ACCOUNT
-# -----------------------------------------------------------------------------
+# =============================================================================
+
 def officer_account():
-    st.markdown('<div class="section-title" style="font-size:1.85rem;margin-top:0;">Officer Account & Settings</div>', unsafe_allow_html=True)
+    st.header("Officer account")
 
-    st.markdown(f"""
-    <div class="metric-card">
-      <div class="metric-label">AUTHORIZED PROCUREMENT OFFICER</div>
-      <div class="metric-value" style="font-size:1.6rem;margin:6px 0;">{st.session_state.get("officer_id","")}</div>
-      <div class="metric-help">Role: Evaluation Committee Officer (GeM Decision Support)</div>
-    </div>
-    """, unsafe_allow_html=True)
+    ui(
+        f"""
+        <div class="tile">
+        <div class="tile-label">Signed-in officer</div>
+        <div class="tile-value" style="font-size:1.45rem;">
+        {escape(str(st.session_state.get("officer_id", "")))}</div>
+        <div class="tile-note">Evaluation committee officer, GeM decision support</div>
+        </div>
+        """
+    )
 
-    st.markdown("<div style='height: 16px;'></div>", unsafe_allow_html=True)
-    st.markdown("#### Security & Access Model")
-    st.write("This workspace uses provisioned officer credentials. Public officer registration is disabled by design to enforce government procurement integrity.")
-    st.info("Production deployments integrate with government single sign-on (SSO) and HSM-backed audit trails.")
+    st.write("")
+    st.subheader("Access")
+    st.write(
+        "Officer credentials are provisioned centrally. Public registration is "
+        "off by design."
+    )
+    st.info(
+        "A production deployment would sign officers in through government SSO "
+        "and write the audit trail to HSM-backed storage."
+    )
 
-    st.markdown("#### Appearance Settings")
-    st.write(f"Active Theme: **{st.session_state.get('theme', 'light').title()} Mode**")
-    st.caption("Use the Dark mode toggle in the sidebar to seamlessly switch themes.")
+    st.subheader("Appearance")
+    st.write(f"Current theme: {st.session_state.get('theme', 'light').title()}")
+    st.caption("Switch it with the dark mode toggle in the sidebar.")
 
 
-# -----------------------------------------------------------------------------
-# MAIN ROUTER
-# -----------------------------------------------------------------------------
-active_view = st.session_state.get("nav_page", "Overview")
+# =============================================================================
+# ROUTER
+# =============================================================================
 
-if active_view == "Overview":
-    dashboard()
-elif active_view == "New Verification":
-    new_verification()
-elif active_view == "Verification History":
-    verification_history()
-elif active_view == "Verification Review":
-    verification_review()
-elif active_view == "Bidder Directory":
-    bidder_directory()
-elif active_view == "Audit Trail":
-    audit_trail()
-elif active_view == "Officer Account":
-    officer_account()
-else:
-    dashboard()
+ROUTES = {
+    "Overview": dashboard,
+    "New verification": new_verification,
+    "Verification history": verification_history,
+    "Verification review": verification_review,
+    "Bidder directory": bidder_directory,
+    "Audit trail": audit_trail,
+    "Officer account": officer_account,
+}
+
+ROUTES.get(st.session_state.get("nav_page", "Overview"), dashboard)()
